@@ -1,0 +1,12 @@
+{
+  "id": 99,
+  "objectID": "99",
+  "name": "Stripe",
+  "slug": "stripe",
+  "website": "https://stripe.com",
+  "one_liner": "Payments infrastructure",
+  "all_locations": "San Francisco, CA, USA",
+  "small_logo_thumb_url": "https://example.com/stripe.png",
+  "batch": "Summer 2009",
+  "industry": "Fintech"
+}

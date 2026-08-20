@@ -1,0 +1,11 @@
+{
+  "id": "c1",
+  "name": "Ramp",
+  "universalName": "ramp",
+  "linkedinUrl": "https://www.linkedin.com/company/ramp",
+  "tagline": "Finance automation",
+  "logo": "https://example.com/ramp.png",
+  "locations": [
+    { "city": "New York", "country": "United States", "headquarter": true }
+  ]
+}

@@ -1,0 +1,58 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Query {
+  id              String   @id @default(cuid())
+  text            String
+  interpretation  String
+  plan            Json
+  status          String
+  summary         String?
+  synthesisStartedAt DateTime?
+  costEstimateUsd Float
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  jobs            Job[]
+  results         Result[]
+}
+
+model Job {
+  id             String    @id @default(cuid())
+  queryId        String
+  query          Query     @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  connectorId    String
+  stepIndex      Int
+  status         String
+  input          Json
+  apifyRunId     String?
+  apifyDatasetId String?
+  itemCount      Int       @default(0)
+  error          String?
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  results        Result[]
+
+  @@index([queryId, stepIndex])
+}
+
+model Result {
+  id         String  @id @default(cuid())
+  queryId    String
+  jobId      String
+  query      Query   @relation(fields: [queryId], references: [id], onDelete: Cascade)
+  job        Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sourceType String
+  externalId String
+  mergeKey   String
+  score      Float?
+  data       Json
+
+  @@unique([queryId, mergeKey])
+  @@index([queryId, sourceType])
+}

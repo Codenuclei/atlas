@@ -1,0 +1,9 @@
+{
+  "id": "p1",
+  "fullName": "Ada Lovelace",
+  "headline": "Founder & CEO",
+  "linkedinUrl": "https://www.linkedin.com/in/ada-lovelace",
+  "location": "San Francisco Bay Area",
+  "photo": "https://example.com/ada.jpg",
+  "currentCompany": "Analytical Engines"
+}

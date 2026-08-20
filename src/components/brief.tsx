@@ -1,0 +1,123 @@
+"use client";
+
+import { useMemo } from "react";
+
+/**
+ * Renders the synthesis text as a structured research note.
+ * Headings come from markdown "##"/"###" lines or ALL-CAPS section lines;
+ * "- " lines become bullets; bare URLs become links.
+ */
+export function Brief({
+  summary,
+  streaming,
+}: {
+  summary: string;
+  streaming?: boolean;
+}) {
+  const blocks = useMemo(() => parseBlocks(summary), [summary]);
+
+  return (
+    <div className="brief-body">
+      {blocks.map((block, index) => {
+        if (block.type === "heading") {
+          return <h3 key={index}>{block.text}</h3>;
+        }
+        if (block.type === "bullets") {
+          return (
+            <ul key={index} className="list-disc">
+              {block.items.map((item, itemIndex) => (
+                <li key={itemIndex}>{renderInline(item)}</li>
+              ))}
+            </ul>
+          );
+        }
+        return <p key={index}>{renderInline(block.text)}</p>;
+      })}
+      {streaming ? (
+        <span className="inline-block h-4 w-1.5 animate-pulse-dot bg-accent align-text-bottom" />
+      ) : null}
+    </div>
+  );
+}
+
+type Block =
+  | { type: "heading"; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "bullets"; items: string[] };
+
+function isHeadingLine(line: string): string | null {
+  const md = line.match(/^#{2,4}\s+(.+)/);
+  if (md) return md[1].trim();
+  const trimmed = line.trim();
+  if (
+    trimmed.length > 4 &&
+    trimmed.length < 90 &&
+    !trimmed.endsWith(".") &&
+    /^[A-Z0-9][A-Z0-9\s\-—:&/]+$/.test(trimmed)
+  ) {
+    return trimmed;
+  }
+  return null;
+}
+
+function parseBlocks(text: string): Block[] {
+  const blocks: Block[] = [];
+  let paragraph: string[] = [];
+  let bullets: string[] = [];
+
+  function flush() {
+    if (paragraph.length) {
+      blocks.push({ type: "paragraph", text: paragraph.join(" ") });
+      paragraph = [];
+    }
+    if (bullets.length) {
+      blocks.push({ type: "bullets", items: bullets });
+      bullets = [];
+    }
+  }
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trimEnd();
+    const heading = isHeadingLine(line);
+    if (heading) {
+      flush();
+      blocks.push({ type: "heading", text: heading });
+      continue;
+    }
+    const bullet = line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.+)/);
+    if (bullet) {
+      if (paragraph.length) flush();
+      bullets.push(bullet[1].trim());
+      continue;
+    }
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    if (bullets.length) flush();
+    paragraph.push(line.trim());
+  }
+  flush();
+  return blocks;
+}
+
+const URL_RE = /(https?:\/\/[^\s)]+)/g;
+
+function renderInline(text: string) {
+  const parts = text.split(URL_RE);
+  return parts.map((part, index) =>
+    part.startsWith("http://") || part.startsWith("https://") ? (
+      <a
+        key={index}
+        href={part}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
+      >
+        {part.replace(/^https?:\/\/(www\.)?/, "").slice(0, 48)}
+      </a>
+    ) : (
+      <span key={index}>{part}</span>
+    ),
+  );
+}

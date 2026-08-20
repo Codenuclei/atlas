@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+:root {
+  /* Surfaces — separated by lightness steps, never shadows */
+  --bg: #101013;
+  --bg-elevated: #17171b;
+  --bg-overlay: #1d1d23;
+  --bg-hover: rgba(255, 255, 255, 0.04);
+
+  /* Hairlines */
+  --stroke: rgba(255, 255, 255, 0.08);
+  --stroke-strong: rgba(255, 255, 255, 0.14);
+
+  /* Text hierarchy */
+  --text-primary: #ececf1;
+  --text-secondary: #a3a3ad;
+  --text-tertiary: #6b6b75;
+
+  /* Single accent, reserved for primary actions and active states */
+  --accent: #5b8def;
+  --accent-muted: rgba(91, 141, 239, 0.12);
+  --on-accent: #ffffff;
+
+  /* Semantic — muted, never neon */
+  --success: #4ca37a;
+  --success-muted: rgba(76, 163, 122, 0.12);
+  --warning: #c9a24b;
+  --warning-muted: rgba(201, 162, 75, 0.12);
+  --danger: #d1665c;
+  --danger-muted: rgba(209, 102, 92, 0.12);
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-elevated: var(--bg-elevated);
+  --color-overlay: var(--bg-overlay);
+  --color-stroke: var(--stroke);
+  --color-stroke-strong: var(--stroke-strong);
+  --color-foreground: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-faint: var(--text-tertiary);
+  --color-accent: var(--accent);
+  --color-accent-muted: var(--accent-muted);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  background: var(--bg);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  min-height: 100vh;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: var(--stroke);
+}
+
+::selection {
+  background: rgba(91, 141, 239, 0.3);
+}
+
+/* Metrics and counts always use tabular numerals */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Focus */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* Scrollbars stay quiet */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Live-run pulse — the only animation in the product */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* Brief reading surface */
+.brief-body {
+  max-width: 680px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+.brief-body h3 {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 15px;
+  margin-top: 28px;
+  margin-bottom: 8px;
+}
+.brief-body p {
+  margin-bottom: 12px;
+}
+.brief-body ul {
+  margin: 0 0 12px 0;
+  padding-left: 18px;
+}
+.brief-body li {
+  margin-bottom: 6px;
+}
+
+@media print {
+  body {
+    background: #fff;
+    color: #111;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .brief-body {
+    color: #222;
+    max-width: none;
+  }
+  .brief-body h3 {
+    color: #111;
+  }
+}

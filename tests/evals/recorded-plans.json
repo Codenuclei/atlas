@@ -1,0 +1,26 @@
+{
+  "AI infra founders in SF who went through YC": {
+    "interpretation": "Find YC companies, then search LinkedIn for AI infra founders in SF.",
+    "intent": "mixed",
+    "expectedResultType": "mixed",
+    "clarificationNeeded": "",
+    "steps": [
+      {
+        "connectorId": "yc-companies",
+        "purpose": "Find YC companies",
+        "dependsOn": [],
+        "params": { "query": "AI infra", "maxItems": 15 }
+      },
+      {
+        "connectorId": "linkedin-profile-search",
+        "purpose": "Find founders",
+        "dependsOn": ["yc-companies"],
+        "params": {
+          "searchQuery": "AI infra founders",
+          "locations": ["San Francisco"],
+          "maxItems": 20
+        }
+      }
+    ]
+  }
+}

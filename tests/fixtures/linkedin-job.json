@@ -1,0 +1,8 @@
+{
+  "id": "j1",
+  "title": "Senior Backend Engineer",
+  "linkedinUrl": "https://www.linkedin.com/jobs/view/1",
+  "employmentType": "Full-time",
+  "location": { "parsed": { "text": "Berlin, Germany" } },
+  "company": { "name": "Fintech Labs", "logo": "https://example.com/logo.png" }
+}

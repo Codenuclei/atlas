@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { DitherField } from "@/components/dither-loader";
 
 /**
  * Renders the synthesis text as a structured research note.
@@ -34,7 +35,13 @@ export function Brief({
         return <p key={index}>{renderInline(block.text)}</p>;
       })}
       {streaming ? (
-        <span className="inline-block h-4 w-1.5 animate-pulse-dot bg-accent align-text-bottom" />
+        <span className="mt-4 flex items-center gap-3 border-t border-stroke pt-4">
+          <DitherField cells={72} rows={12} className="h-4 w-20" />
+          <span className="text-[11px] text-faint">
+            Writing the brief
+            <span className="animate-pulse-dot">…</span>
+          </span>
+        </span>
       ) : null}
     </div>
   );

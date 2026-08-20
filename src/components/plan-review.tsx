@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Pencil } from "lucide-react";
+import { ArrowLeft, PencilSimple, Play, Spinner } from "@phosphor-icons/react";
 import type { ScrapePlan, ScrapeStep } from "@/lib/ai/plan-schema";
 import { jobStageLabel } from "@/lib/view-model";
 import { Button, Card, CardHeader, cn } from "@/components/ui";
@@ -39,7 +39,7 @@ function StepRow({
         checked={enabled}
         onChange={onToggle}
         aria-label={`Include step ${index + 1}`}
-        className="mt-1 size-3.5 shrink-0 accent-[#5b8def]"
+        className="mt-1 size-3.5 shrink-0 accent-accent"
       />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
@@ -79,9 +79,9 @@ function StepRow({
         type="button"
         onClick={() => setEditing((value) => !value)}
         aria-label="Edit step purpose"
-        className="mt-0.5 rounded-md p-1.5 text-faint transition-colors hover:bg-white/[.05] hover:text-foreground"
+        className="mt-0.5 rounded-md p-1.5 text-faint transition-colors hover:bg-hover hover:text-foreground"
       >
-        <Pencil className="size-3.5" />
+        <PencilSimple size={14} />
       </button>
     </div>
   );
@@ -153,7 +153,7 @@ export function PlanReview({
         onClick={onBack}
         className="flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-foreground"
       >
-        <ArrowLeft className="size-3.5" /> Edit query
+        <ArrowLeft size={14} /> Edit query
       </button>
 
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
@@ -221,8 +221,16 @@ export function PlanReview({
           Parameters are validated again on the server before anything runs.
         </p>
         <Button onClick={approve} disabled={pending || enabledCount === 0}>
-          {pending ? "Starting…" : `Approve & run ${enabledCount} step${enabledCount === 1 ? "" : "s"}`}
-          {!pending ? <ArrowRight className="size-3.5" /> : null}
+          {pending ? (
+            <>
+              <Spinner size={13} className="animate-spin" /> Starting…
+            </>
+          ) : (
+            <>
+              <Play size={13} weight="fill" />
+              {`Approve & run ${enabledCount} step${enabledCount === 1 ? "" : "s"}`}
+            </>
+          )}
         </Button>
       </div>
     </section>

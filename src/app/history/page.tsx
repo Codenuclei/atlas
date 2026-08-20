@@ -2,6 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, MagnifyingGlass } from "@phosphor-icons/react";
+import { DitherLoader } from "@/components/dither-loader";
+import { fetchWithHash, readCache } from "@/lib/client-cache";
 import { EmptyState, SectionHeading, StatusBadge, cn } from "@/components/ui";
 import { displayStatus, formatAge, jobStageLabel } from "@/lib/view-model";
 
@@ -29,11 +32,25 @@ export default function HistoryPage() {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    fetch("/api/queries")
-      .then((response) => response.json())
-      .then((payload) => setRuns(payload.queries ?? []))
+    let cancelled = false;
+    // Instant paint from the local cache, then revalidate against the server.
+    const cached = readCache<{ queries?: RunRow[] }>("queries");
+    if (cached?.data.queries) {
+      setRuns(cached.data.queries);
+      setLoaded(true);
+    }
+    fetchWithHash<{ queries?: RunRow[] }>("queries", "/api/queries")
+      .then((result) => {
+        if (cancelled || !result) return; // 304 — cache is current
+        setRuns(result.data.queries ?? []);
+      })
       .catch(() => undefined)
-      .finally(() => setLoaded(true));
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const visible = useMemo(() => {
@@ -84,7 +101,7 @@ export default function HistoryPage() {
               className={cn(
                 "h-7 px-2.5 text-xs transition-colors first:rounded-l-md last:rounded-r-md",
                 statusFilter === filter.id
-                  ? "bg-white/[.08] font-medium text-foreground"
+                  ? "bg-active font-medium text-foreground"
                   : "text-muted hover:text-foreground",
               )}
             >
@@ -92,20 +109,19 @@ export default function HistoryPage() {
             </button>
           ))}
         </div>
-        <input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search queries…"
-          className="h-7 w-56 rounded-md border border-stroke bg-transparent px-2 text-xs placeholder:text-faint focus:outline-none"
-        />
+        <label className="flex h-7 w-56 items-center gap-1.5 rounded-md border border-stroke px-2 transition-colors focus-within:border-stroke-strong">
+          <MagnifyingGlass size={12} className="shrink-0 text-faint" />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search queries…"
+            className="w-full bg-transparent text-xs placeholder:text-faint focus:outline-none"
+          />
+        </label>
       </div>
 
       {!loaded ? (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, index) => (
-            <div key={index} className="h-14 animate-pulse rounded-lg bg-white/[.04]" />
-          ))}
-        </div>
+        <DitherLoader label="Loading runs" />
       ) : visible.length === 0 ? (
         <EmptyState
           title={runs.length === 0 ? "No runs yet" : "No runs match this filter"}
@@ -125,7 +141,7 @@ export default function HistoryPage() {
               <button
                 key={run.id}
                 onClick={() => router.push(`/queries/${run.id}`)}
-                className="flex w-full items-center justify-between gap-4 border-b border-stroke px-4 py-3 text-left transition-colors last:border-0 hover:bg-white/[.03]"
+                className="flex w-full items-center justify-between gap-4 border-b border-stroke px-4 py-3 text-left transition-colors last:border-0 hover:bg-hover"
               >
                 <div className="min-w-0">
                   <p className="truncate text-[13px] font-medium">{run.text}</p>
@@ -145,7 +161,10 @@ export default function HistoryPage() {
                     ) : null}
                   </p>
                 </div>
-                <StatusBadge label={status.label} tone={status.tone} />
+                <span className="nudge-icon flex shrink-0 items-center gap-2">
+                  <StatusBadge label={status.label} tone={status.tone} />
+                  <ArrowRight size={13} className="text-faint" />
+                </span>
               </button>
             );
           })}

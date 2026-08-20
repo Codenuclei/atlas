@@ -2,6 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ArrowRight } from "@phosphor-icons/react";
+import { DitherLoader } from "@/components/dither-loader";
+import { fetchWithHash, readCache } from "@/lib/client-cache";
 import { ResearchIntake, composeQuery, type IntakeValues } from "@/components/intake";
 import { PlanReview } from "@/components/plan-review";
 import { EmptyState, SectionHeading, StatusBadge } from "@/components/ui";
@@ -42,10 +45,18 @@ export default function HomePage() {
   const [runs, setRuns] = useState<RunRow[]>([]);
 
   useEffect(() => {
-    fetch("/api/queries")
-      .then((response) => response.json())
-      .then((payload) => setRuns(payload.queries ?? []))
+    let cancelled = false;
+    const cached = readCache<{ queries?: RunRow[] }>("queries");
+    if (cached?.data.queries) setRuns(cached.data.queries);
+    fetchWithHash<{ queries?: RunRow[] }>("queries", "/api/queries")
+      .then((result) => {
+        if (cancelled || !result) return;
+        setRuns(result.data.queries ?? []);
+      })
       .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Re-estimate cost when the plan is edited during review.
@@ -120,7 +131,15 @@ export default function HomePage() {
   return (
     <main className="space-y-10">
       {stage === "intake" ? (
-        <ResearchIntake onSubmit={generatePlan} pending={pending} />
+        <ResearchIntake
+          onSubmit={generatePlan}
+          pending={pending}
+          mood={error ? "error" : pending ? "thinking" : "idle"}
+        />
+      ) : null}
+
+      {pending && stage === "intake" ? (
+        <DitherLoader label="Planning the research operation" />
       ) : null}
 
       {error ? (
@@ -146,10 +165,7 @@ export default function HomePage() {
       <section className="space-y-3">
         <SectionHeading title="Recent runs" meta={`${runs.length} total`} />
         {runs.length === 0 ? (
-          <EmptyState
-            title="No runs yet"
-            body="A good first run names a brand or channel and both platforms — for example: Analyze content for your own channel across YouTube and Instagram. Exact external creatives, owned evidence, and a cited brief appear here when it finishes."
-          />
+          <EmptyState icon="ufo" title="No runs yet" />
         ) : (
           <div className="overflow-hidden rounded-lg border border-stroke">
             {runs.slice(0, 8).map((run) => {
@@ -159,7 +175,7 @@ export default function HomePage() {
                 <button
                   key={run.id}
                   onClick={() => router.push(`/queries/${run.id}`)}
-                  className="flex w-full items-center justify-between gap-4 border-b border-stroke px-4 py-3 text-left transition-colors last:border-0 hover:bg-white/[.03]"
+                  className="flex w-full items-center justify-between gap-4 border-b border-stroke px-4 py-3 text-left transition-colors last:border-0 hover:bg-hover"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-[13px] font-medium">{run.text}</p>
@@ -169,7 +185,10 @@ export default function HomePage() {
                       {formatAge(run.createdAt)}
                     </p>
                   </div>
-                  <StatusBadge label={status.label} tone={status.tone} />
+                  <span className="nudge-icon flex shrink-0 items-center gap-2">
+                    <StatusBadge label={status.label} tone={status.tone} />
+                    <ArrowRight size={13} className="text-faint" />
+                  </span>
                 </button>
               );
             })}
@@ -180,7 +199,9 @@ export default function HomePage() {
             onClick={() => router.push("/history")}
             className="text-xs text-muted transition-colors hover:text-foreground"
           >
-            View all {runs.length} runs →
+            <span className="nudge-icon flex items-center gap-1">
+              View all {runs.length} runs <ArrowRight size={12} />
+            </span>
           </button>
         ) : null}
       </section>

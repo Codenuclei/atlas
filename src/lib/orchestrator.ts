@@ -16,6 +16,12 @@ import {
 } from "@/lib/status";
 import { AppError } from "@/lib/errors";
 import {
+  LIST_HASH_KEY,
+  detailHashKey,
+  dropDataHash,
+  touchDataHash,
+} from "@/lib/data-hash";
+import {
   collectOwnedBrandSignals,
   deriveContentExampleQueries,
   deriveInstagramExampleHashtags,
@@ -47,6 +53,7 @@ export async function createQueryFromPlan(text: string, planInput: ScrapePlan) {
     },
     include: { jobs: true },
   });
+  await touchDataHash(LIST_HASH_KEY, detailHashKey(query.id));
   await kickReadyJobs(query.id);
   return db.query.findUniqueOrThrow({
     where: { id: query.id },
@@ -85,13 +92,14 @@ function failedDependency(
   );
 }
 
-async function kickReadyJobs(queryId: string) {
+async function kickReadyJobs(queryId: string): Promise<boolean> {
   const plan = (
     await db.query.findUniqueOrThrow({
       where: { id: queryId },
     })
   ).plan as ScrapePlan;
 
+  let changed = false;
   let progressed = true;
   while (progressed) {
     progressed = false;
@@ -113,16 +121,20 @@ async function kickReadyJobs(queryId: string) {
           },
         });
         progressed = true;
+        changed = true;
         continue;
       }
       if (!stepReady(job, jobs, plan)) continue;
-      await startJob(job.id);
-      progressed = true;
+      if (await startJob(job.id)) {
+        progressed = true;
+        changed = true;
+      }
     }
   }
+  return changed;
 }
 
-async function startJob(jobId: string) {
+async function startJob(jobId: string): Promise<boolean> {
   const job = await db.job.findUniqueOrThrow({
     where: { id: jobId },
     include: { query: { include: { results: true, jobs: true } } },
@@ -131,7 +143,7 @@ async function startJob(jobId: string) {
     where: { id: jobId, status: "queued", apifyRunId: null },
     data: { status: "running", error: null },
   });
-  if (claimed.count === 0) return;
+  if (claimed.count === 0) return false;
   try {
   const connector = getConnector(job.connectorId);
   let params = hydrateDetailParams(
@@ -182,7 +194,7 @@ async function startJob(jobId: string) {
         input: prepared.input as Prisma.InputJsonValue,
       },
     });
-    return;
+    return true;
   }
     const run = await getApify().startActor(
       prepared.actorId!,
@@ -208,6 +220,7 @@ async function startJob(jobId: string) {
       },
     });
   }
+  return true;
 }
 
 function hydrateDetailParams(
@@ -429,12 +442,14 @@ export async function syncQuery(queryId: string) {
   }
 
   const apify = getApify();
+  let dirty = false;
   for (let round = 0; round < 6; round += 1) {
     const jobs = await db.job.findMany({ where: { queryId } });
     for (const job of jobs) {
       if (!job.apifyRunId || isTerminalJobStatus(job.status)) continue;
       const run = await apify.getRun(job.apifyRunId);
       const status = mapApifyStatus(run.status);
+      if (status !== job.status) dirty = true;
       await db.job.update({
         where: { id: job.id },
         data: {
@@ -446,9 +461,10 @@ export async function syncQuery(queryId: string) {
       });
       if (status === "succeeded") {
         await ingestDataset(job.id);
+        dirty = true;
       }
     }
-    await kickReadyJobs(queryId);
+    if (await kickReadyJobs(queryId)) dirty = true;
     const remaining = await db.job.count({
       where: { queryId, status: { in: ["queued", "running"] } },
     });
@@ -469,6 +485,7 @@ export async function syncQuery(queryId: string) {
       data: { synthesisStartedAt: new Date(), status: nextStatus },
     });
     if (claim.count > 0) {
+      dirty = true;
       try {
         const synthesis = await scoreResults(
           fresh.text,
@@ -497,16 +514,22 @@ export async function syncQuery(queryId: string) {
         });
       }
     } else {
+      if (nextStatus !== fresh.status) dirty = true;
       await db.query.update({
         where: { id: queryId },
         data: { status: nextStatus },
       });
     }
   } else {
+    if (nextStatus !== fresh.status) dirty = true;
     await db.query.update({
       where: { id: queryId },
       data: { status: nextStatus },
     });
+  }
+
+  if (dirty) {
+    await touchDataHash(LIST_HASH_KEY, detailHashKey(queryId));
   }
 
   return db.query.findUniqueOrThrow({
@@ -546,6 +569,8 @@ export async function deleteQuery(queryId: string) {
     }
   }
   await db.query.delete({ where: { id: queryId } });
+  await touchDataHash(LIST_HASH_KEY);
+  await dropDataHash(detailHashKey(queryId));
   return { id: queryId };
 }
 
@@ -570,6 +595,7 @@ export async function abortQuery(queryId: string) {
     where: { id: queryId },
     data: { status: "aborted" },
   });
+  await touchDataHash(LIST_HASH_KEY, detailHashKey(queryId));
   return syncQuery(queryId);
 }
 

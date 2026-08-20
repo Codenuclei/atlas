@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowUpDown, Download } from "lucide-react";
+import { ArrowsDownUp, DownloadSimple } from "@phosphor-icons/react";
 import type { ScrapedRecord } from "@/lib/normalize";
 import { recordsToCsv } from "@/lib/export";
 import {
@@ -124,12 +124,12 @@ export function EvidenceTable({
               type="checkbox"
               checked={compact}
               onChange={(event) => setCompact(event.target.checked)}
-              className="size-3 accent-[#5b8def]"
+              className="size-3 accent-accent"
             />
             Compact
           </label>
           <Button variant="secondary" size="sm" onClick={exportSelection}>
-            <Download className="size-3.5" />
+            <DownloadSimple size={14} />
             {selected.size > 0 ? "Export selected" : "Export all"}
           </Button>
         </div>
@@ -157,7 +157,7 @@ export function EvidenceTable({
                     )}
                   >
                     {column.label}
-                    <ArrowUpDown className="size-3 opacity-60" />
+                    <ArrowsDownUp size={11} className="opacity-60" />
                   </button>
                 </th>
               ))}
@@ -171,8 +171,8 @@ export function EvidenceTable({
                 <tr
                   key={key}
                   className={cn(
-                    "border-b border-stroke transition-colors last:border-0 hover:bg-white/[.03]",
-                    compact && index % 2 === 1 && "bg-white/[.015]",
+                    "border-b border-stroke transition-colors last:border-0 hover:bg-hover",
+                    compact && index % 2 === 1 && "bg-zebra",
                     selected.has(key) && "bg-accent-muted",
                   )}
                 >
@@ -182,7 +182,7 @@ export function EvidenceTable({
                       checked={selected.has(key)}
                       onChange={() => toggleRow(item)}
                       aria-label={`Select ${item.record.title}`}
-                      className="size-3 accent-[#5b8def]"
+                      className="size-3 accent-accent"
                     />
                   </td>
                   <td className={cn("max-w-0 px-3", compact ? "py-1" : "py-2")}>

@@ -1,6 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import {
+  Globe,
+  InstagramLogo,
+  SortDescending,
+  YoutubeLogo,
+} from "@phosphor-icons/react";
 import type { ScrapedRecord } from "@/lib/normalize";
 import {
   engagementOf,
@@ -124,23 +130,26 @@ export function CreativesBoard({
           <div className="flex rounded-md border border-stroke">
             {(
               [
-                ["all", `All ${external.length}`],
-                ["youtube", `YouTube ${counts.youtube}`],
-                ["instagram", `Instagram ${counts.instagram}`],
+                ["all", "All platforms", external.length, Globe],
+                ["youtube", "YouTube", counts.youtube, YoutubeLogo],
+                ["instagram", "Instagram", counts.instagram, InstagramLogo],
               ] as const
-            ).map(([id, label]) => (
+            ).map(([id, label, count, Icon]) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setPlatform(id)}
+                aria-label={`${label}, ${count} creatives`}
+                data-tip={label}
                 className={cn(
-                  "h-7 px-2.5 text-xs transition-colors first:rounded-l-md last:rounded-r-md",
+                  "tip press flex h-7 items-center gap-1.5 px-2.5 text-xs transition-colors first:rounded-l-md last:rounded-r-md",
                   platform === id
-                    ? "bg-white/[.08] font-medium text-foreground"
+                    ? "bg-active font-medium text-foreground"
                     : "text-muted hover:text-foreground",
                 )}
               >
-                {label}
+                <Icon size={13} weight={platform === id ? "fill" : "regular"} />
+                <span className="tnum">{count}</span>
               </button>
             ))}
           </div>
@@ -160,7 +169,7 @@ export function CreativesBoard({
                 className={cn(
                   "h-7 px-2.5 text-xs transition-colors first:rounded-l-md last:rounded-r-md",
                   role === id
-                    ? "bg-white/[.08] font-medium text-foreground"
+                    ? "bg-active font-medium text-foreground"
                     : "text-muted hover:text-foreground",
                 )}
               >
@@ -170,6 +179,7 @@ export function CreativesBoard({
           </div>
 
           <label className="ml-auto flex items-center gap-2 text-xs text-faint">
+            <SortDescending size={13} />
             Sort
             <select
               value={sort}
@@ -192,15 +202,20 @@ export function CreativesBoard({
           />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {visible.map((item) => (
-              <CreativeCard
+            {visible.map((item, index) => (
+              <div
                 key={`${item.record.sourceType}-${item.record.externalId}`}
+                className="rise"
+                style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
+              >
+              <CreativeCard
                 record={item.record}
                 role={item.role}
                 href={`/queries/${queryId}/creative/${encodeURIComponent(item.record.externalId)}`}
                 selected={savedKeys.has(`${item.record.sourceType}:${item.record.externalId}`)}
                 onToggleSelect={() => onToggleSave(item)}
               />
+              </div>
             ))}
           </div>
         )}

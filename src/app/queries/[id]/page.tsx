@@ -3,14 +3,20 @@
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowClockwise,
   ArrowLeft,
+  Article,
+  Check,
   Copy,
-  Download,
-  MoreHorizontal,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+  DotsThree,
+  DownloadSimple,
+  FileJs,
+  GridFour,
+  Table,
+  Trash,
+} from "@phosphor-icons/react";
 import { Button, StatusBadge, cn } from "@/components/ui";
+import { GrokBot, type BotMood } from "@/components/grok-bot";
 import { RunStatus } from "@/components/run-status";
 import { CreativesBoard, boardRecordsFrom } from "@/components/creatives-board";
 import { EvidenceTable } from "@/components/evidence-table";
@@ -20,6 +26,13 @@ import { resultRowsToRecords } from "@/lib/export";
 import { isTerminalQueryStatus } from "@/lib/status";
 import { displayStatus, isContentRecord } from "@/lib/view-model";
 import { useCollections } from "@/lib/collections";
+import {
+  fetchWithHash,
+  invalidateCache,
+  postWithHash,
+  readCache,
+} from "@/lib/client-cache";
+import { DitherLoader } from "@/components/dither-loader";
 
 type QueryPayload = {
   id: string;
@@ -63,21 +76,38 @@ export default function QueryPage() {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastStatus = "";
+    const cacheKey = `query:${params.id}`;
+
+    // Instant paint from the local cache while the server revalidates.
+    const cached = readCache<{ query?: QueryPayload }>(cacheKey);
+    if (cached?.data.query) {
+      lastStatus = cached.data.query.status;
+      setQuery(cached.data.query);
+      if (cached.data.query.summary) setSummary(cached.data.query.summary);
+    }
 
     async function poll(initial = false) {
       try {
-        const response = await fetch(`/api/queries/${params.id}`, {
-          cache: "no-store",
-          method: initial ? "GET" : "POST",
-        });
-        const payload = await response.json();
-        if (!response.ok)
-          throw new Error(payload.message ?? "Failed to load query");
+        const result = initial
+          ? await fetchWithHash<{ query: QueryPayload }>(
+              cacheKey,
+              `/api/queries/${params.id}`,
+            )
+          : await postWithHash<{ query: QueryPayload }>(
+              cacheKey,
+              `/api/queries/${params.id}`,
+            );
         if (cancelled) return;
-        setQuery(payload.query);
-        if (payload.query.summary) setSummary(payload.query.summary);
-        if (!isTerminalQueryStatus(payload.query.status)) {
-          timer = setTimeout(poll, 1500);
+        if (result) {
+          const payload = result.data;
+          lastStatus = payload.query.status;
+          setQuery(payload.query);
+          if (payload.query.summary) setSummary(payload.query.summary);
+        }
+        // On 304 / unchanged, skip state updates but keep polling live runs.
+        if (lastStatus && !isTerminalQueryStatus(lastStatus)) {
+          timer = setTimeout(() => poll(false), 1500);
         }
       } catch (err) {
         if (!cancelled) {
@@ -91,6 +121,7 @@ export default function QueryPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
   useEffect(() => {
@@ -187,8 +218,12 @@ export default function QueryPage() {
     const response = await fetch(`/api/queries/${params.id}`, {
       method: "DELETE",
     });
-    if (response.ok) router.push("/history");
-    else setActionPending("");
+    if (response.ok) {
+      invalidateCache("queries", `query:${params.id}`);
+      router.push("/history");
+    } else {
+      setActionPending("");
+    }
   }
 
   async function copyLink() {
@@ -206,20 +241,22 @@ export default function QueryPage() {
   }
 
   if (!query) {
-    return (
-      <div className="space-y-4">
-        <div className="h-6 w-32 animate-pulse rounded bg-white/[.05]" />
-        <div className="h-9 w-2/3 animate-pulse rounded bg-white/[.05]" />
-        <div className="h-40 animate-pulse rounded-lg bg-white/[.04]" />
-      </div>
-    );
+    return <DitherLoader label="Loading run" className="mt-10" />;
   }
 
   const status = displayStatus(query.status, query.jobs);
-  const tabs: Array<{ id: Tab; label: string }> = [
-    { id: "creatives", label: `Creatives ${boardItems.filter((i) => isContentRecord(i.record)).length || ""}` },
-    { id: "brief", label: "Brief" },
-    { id: "evidence", label: `Evidence ${records.length || ""}` },
+  const botMood: BotMood =
+    query.status === "running"
+      ? "working"
+      : query.status === "succeeded"
+        ? "done"
+        : query.status === "failed" || query.status === "aborted"
+          ? "error"
+          : "idle";
+  const tabs: Array<{ id: Tab; label: string; icon: typeof GridFour }> = [
+    { id: "creatives", label: `Creatives ${boardItems.filter((i) => isContentRecord(i.record)).length || ""}`, icon: GridFour },
+    { id: "brief", label: "Brief", icon: Article },
+    { id: "evidence", label: `Evidence ${records.length || ""}`, icon: Table },
   ];
 
   return (
@@ -228,27 +265,36 @@ export default function QueryPage() {
         onClick={() => router.push("/history")}
         className="flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-foreground no-print"
       >
-        <ArrowLeft className="size-3.5" /> All runs
+        <ArrowLeft size={14} /> All runs
       </button>
 
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div className="min-w-0 max-w-3xl">
           <div className="mb-2 flex flex-wrap items-center gap-2">
+            <GrokBot
+              mood={botMood}
+              className="size-8 shrink-0"
+            />
             <StatusBadge label={status.label} tone={status.tone} />
             <span className="tnum text-[11px] text-faint">
               ${query.costEstimateUsd.toFixed(2)} est.
             </span>
           </div>
-          <h1 className="text-xl font-semibold tracking-[-0.02em]">{query.text}</h1>
+          <h1 className="display text-[26px] leading-[1.2] font-medium">{query.text}</h1>
           <p className="mt-1.5 text-[13px] leading-5 text-muted">
             {query.interpretation}
           </p>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2 no-print">
-          <a href={`/api/queries/${query.id}/export?format=csv`}>
-            <Button size="sm">
-              <Download className="size-3.5" /> Export
+        <div className="flex shrink-0 items-center gap-1.5 no-print">
+          <a
+            href={`/api/queries/${query.id}/export?format=csv`}
+            className="tip"
+            data-tip="Export CSV"
+            aria-label="Export CSV"
+          >
+            <Button size="sm" className="px-2.5" tabIndex={-1}>
+              <DownloadSimple size={15} />
             </Button>
           </a>
           {!running ? (
@@ -257,14 +303,22 @@ export default function QueryPage() {
               size="sm"
               onClick={rerun}
               disabled={Boolean(actionPending)}
+              className="tip px-2.5"
+              data-tip="Run again"
+              aria-label="Run again"
             >
-              <RefreshCw className="size-3.5" />
-              {actionPending === "rerun" ? "Starting…" : "Run again"}
+              <ArrowClockwise size={15} className={actionPending === "rerun" ? "animate-spin" : undefined} />
             </Button>
           ) : null}
-          <Button variant="ghost" size="sm" onClick={copyLink}>
-            <Copy className="size-3.5" />
-            {copied ? "Copied" : "Copy link"}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={copyLink}
+            className="tip px-2.5"
+            data-tip={copied ? "Copied" : "Copy link"}
+            aria-label={copied ? "Copied" : "Copy link"}
+          >
+            {copied ? <Check size={15} className="text-success" /> : <Copy size={15} />}
           </Button>
           <div className="relative" ref={menuRef}>
             <Button
@@ -273,15 +327,15 @@ export default function QueryPage() {
               onClick={() => setMenuOpen((value) => !value)}
               aria-label="More actions"
             >
-              <MoreHorizontal className="size-4" />
+              <DotsThree size={16} weight="bold" />
             </Button>
             {menuOpen ? (
               <div className="absolute right-0 top-9 z-10 w-44 rounded-lg border border-stroke bg-overlay p-1">
                 <a
                   href={`/api/queries/${query.id}/export?format=json`}
-                  className="block rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-white/[.05] hover:text-foreground"
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-hover hover:text-foreground"
                 >
-                  Export JSON
+                  <FileJs size={13} /> Export JSON
                 </a>
                 <button
                   type="button"
@@ -292,7 +346,7 @@ export default function QueryPage() {
                   disabled={Boolean(actionPending)}
                   className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left text-xs text-danger hover:bg-danger/10"
                 >
-                  <Trash2 className="size-3.5" /> Delete run
+                  <Trash size={13} /> Delete run
                 </button>
               </div>
             ) : null}
@@ -315,12 +369,13 @@ export default function QueryPage() {
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={cn(
-              "shrink-0 border-b-2 px-3.5 py-2.5 text-[13px] transition-colors",
+              "flex shrink-0 items-center gap-1.5 border-b-2 px-3.5 py-2.5 text-[13px] transition-colors",
               resolvedTab === tab.id
                 ? "border-accent font-medium text-foreground"
                 : "border-transparent text-muted hover:text-foreground",
             )}
           >
+            <tab.icon size={14} weight={resolvedTab === tab.id ? "fill" : "regular"} />
             {tab.label}
           </button>
         ))}
@@ -355,6 +410,7 @@ export default function QueryPage() {
                 onClick={streamBrief}
                 disabled={!records.length || Boolean(actionPending)}
               >
+                <Article size={13} />
                 {actionPending === "brief" ? "Writing…" : "Generate brief"}
               </Button>
             ) : null}

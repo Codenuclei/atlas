@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { LIST_HASH_KEY, detailHashKey, touchDataHash } from "@/lib/data-hash";
 import { streamSummary } from "@/lib/ai/synthesize";
 import { resultRowsToRecords } from "@/lib/export";
 import { AppError, errorToResponse } from "@/lib/errors";
@@ -54,6 +55,7 @@ export async function POST(
             write,
           );
           await db.query.update({ where: { id }, data: { summary } });
+          await touchDataHash(LIST_HASH_KEY, detailHashKey(id));
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, summary })}\n\n`));
         } catch (error) {
           console.error("Summary stream failed", error);

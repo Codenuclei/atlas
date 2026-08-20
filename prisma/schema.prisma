@@ -56,3 +56,14 @@ model Result {
   @@unique([queryId, mergeKey])
   @@index([queryId, sourceType])
 }
+
+// Version pool: one row per cacheable dataset ("queries:list", "query:<id>").
+// Unchanged checks are a single indexed lookup here — the Query/Job/Result
+// tables are only read when the pool says something actually changed.
+model DataHash {
+  key       String   @id
+  hash      String
+  updatedAt DateTime @updatedAt
+
+  @@index([hash])
+}

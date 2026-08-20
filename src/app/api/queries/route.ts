@@ -3,6 +3,12 @@ import { scrapePlanSchema } from "@/lib/ai/plan-schema";
 import { createQueryFromPlan, listQueries } from "@/lib/orchestrator";
 import { AppError, errorToResponse } from "@/lib/errors";
 import { guardMutation, noStoreHeaders, rateLimit } from "@/lib/request-security";
+import {
+  LIST_HASH_KEY,
+  hashQueryList,
+  readPooledHash,
+  writePooledHash,
+} from "@/lib/data-hash";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -15,8 +21,25 @@ const createSchema = z.object({
 export async function GET(request: Request) {
   try {
     rateLimit(request, "query-list", 60);
+    const knownHash = new URL(request.url).searchParams.get("hash");
+    // Cheap path: one indexed pool lookup, no Query/Job reads at all.
+    if (knownHash) {
+      const pooled = await readPooledHash(LIST_HASH_KEY);
+      if (pooled && pooled === knownHash) {
+        return new Response(null, {
+          status: 304,
+          headers: { ...noStoreHeaders(), "x-data-hash": pooled },
+        });
+      }
+    }
     const queries = await listQueries();
-    return Response.json({ queries }, { headers: noStoreHeaders() });
+    const hash = hashQueryList(queries);
+    await writePooledHash(LIST_HASH_KEY, hash);
+    const headers = { ...noStoreHeaders(), "x-data-hash": hash };
+    if (knownHash && knownHash === hash) {
+      return new Response(null, { status: 304, headers });
+    }
+    return Response.json({ queries, hash }, { headers });
   } catch (error) {
     return errorToResponse(error);
   }

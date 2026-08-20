@@ -1,6 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import {
+  BookmarkSimple,
+  ChatCircle,
+  Eye,
+  Heart,
+} from "@phosphor-icons/react";
 import type { ScrapedRecord } from "@/lib/normalize";
 import {
   engagementOf,
@@ -31,8 +37,8 @@ export function CreativeCard({
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-lg border bg-elevated transition-colors",
-        selected ? "border-accent" : "border-stroke hover:border-stroke-strong",
+        "card-hover group relative overflow-hidden rounded-lg border bg-elevated",
+        selected ? "border-accent" : "border-stroke",
       )}
     >
       <Link href={href} className="block">
@@ -79,9 +85,18 @@ export function CreativeCard({
             </span>
           </div>
           <div className="tnum flex items-center gap-3 border-t border-stroke pt-2 text-[11px] text-muted">
-            <span>{formatCompact(engagement.views)} views</span>
-            <span>{formatRate(engagement.rate)} eng</span>
-            <span>{formatCompact(engagement.comments)} comments</span>
+            <span className="flex items-center gap-1">
+              <Eye size={12} className="text-faint" />
+              {formatCompact(engagement.views)}
+            </span>
+            <span className="flex items-center gap-1">
+              <Heart size={12} className="text-faint" />
+              {formatRate(engagement.rate)}
+            </span>
+            <span className="flex items-center gap-1">
+              <ChatCircle size={12} className="text-faint" />
+              {formatCompact(engagement.comments)}
+            </span>
           </div>
         </div>
       </Link>
@@ -92,15 +107,16 @@ export function CreativeCard({
             event.preventDefault();
             onToggleSelect();
           }}
-          aria-label="Select creative"
+          aria-label={selected ? "Remove from collection" : "Save to collection"}
+          data-tip={selected ? "Saved — remove" : "Save to collection"}
           className={cn(
-            "absolute bottom-2 right-2 rounded-md border px-2 py-1 text-[10px] font-medium opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100",
+            "tip press absolute bottom-2 right-2 grid size-7 place-items-center rounded-md border opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100",
             selected
               ? "border-accent bg-accent-muted text-accent opacity-100"
               : "border-stroke-strong bg-black/60 text-white",
           )}
         >
-          {selected ? "Saved" : "Save"}
+          <BookmarkSimple size={13} weight={selected ? "fill" : "regular"} />
         </button>
       ) : null}
     </div>

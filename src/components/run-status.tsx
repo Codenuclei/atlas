@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { CaretDown, HandPalm } from "@phosphor-icons/react";
 import { isTerminalJobStatus } from "@/lib/status";
 import { displayStatus, jobStageLabel } from "@/lib/view-model";
+import { DitherField } from "@/components/dither-loader";
 import { Button, Card, CardHeader, StatusBadge, cn } from "@/components/ui";
 
 export type JobRow = {
@@ -59,7 +60,16 @@ export function RunStatus({
         }
       />
       <div className="space-y-4 p-4">
-        <div className="h-1 overflow-hidden rounded-full bg-white/[.06]">
+        {running ? (
+          <div className="flex items-center justify-between gap-4 rounded-md border border-stroke bg-background px-3 py-2">
+            <DitherField cells={120} rows={16} className="h-6 w-36" />
+            <span className="text-[11px] text-faint">
+              Collecting evidence
+              <span className="animate-pulse-dot">…</span>
+            </span>
+          </div>
+        ) : null}
+        <div className="h-1 overflow-hidden rounded-full bg-track">
           <div
             className={cn(
               "h-full rounded-full transition-all duration-500",
@@ -120,13 +130,15 @@ export function RunStatus({
             onClick={() => setShowTechnical((value) => !value)}
             className="flex items-center gap-1 text-[11px] text-faint transition-colors hover:text-muted"
           >
-            <ChevronDown
-              className={cn("size-3 transition-transform", showTechnical && "rotate-180")}
+            <CaretDown
+              size={12}
+              className={cn("transition-transform", showTechnical && "rotate-180")}
             />
             Technical details
           </button>
           {running ? (
             <Button variant="secondary" size="sm" onClick={onStop} disabled={stopPending}>
+              <HandPalm size={13} />
               {stopPending ? "Stopping…" : `Stop & keep ${totalItems} item${totalItems === 1 ? "" : "s"}`}
             </Button>
           ) : null}

@@ -2,6 +2,8 @@ import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
 import type { RecordRole, StatusTone } from "@/lib/view-model";
+import { GrokBot } from "@/components/grok-bot";
+import { UfoBeam } from "@/components/ufo-beam";
 
 export function cn(...inputs: Parameters<typeof clsx>) {
   return twMerge(clsx(inputs));
@@ -23,12 +25,12 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45",
+        "press inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45",
         size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[13px]",
-        variant === "primary" && "bg-accent text-white hover:bg-accent/85",
+        variant === "primary" && "btn-solid",
         variant === "secondary" &&
-          "border border-stroke-strong bg-transparent text-foreground hover:bg-white/[.05]",
-        variant === "ghost" && "text-muted hover:bg-white/[.05] hover:text-foreground",
+          "btn-ghost border border-stroke-strong bg-transparent text-foreground hover:bg-hover",
+        variant === "ghost" && "text-muted hover:bg-hover hover:text-foreground",
         variant === "danger" &&
           "border border-danger/30 bg-transparent text-danger hover:bg-danger/10",
         className,
@@ -46,7 +48,7 @@ export function Card({
 }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("rounded-lg border border-stroke bg-elevated", className)}
+      className={cn("card-lift rounded-lg border border-stroke bg-elevated", className)}
       {...props}
     />
   );
@@ -174,15 +176,24 @@ export function EmptyState({
   title,
   body,
   action,
+  icon = "bot",
 }: {
   title: string;
-  body: string;
+  body?: string;
   action?: ReactNode;
+  icon?: "bot" | "ufo";
 }) {
   return (
     <div className="rounded-lg border border-dashed border-stroke-strong px-6 py-10 text-center">
+      {icon === "ufo" ? (
+        <UfoBeam className="mascot-float mx-auto mb-4 size-14 text-accent" />
+      ) : (
+        <GrokBot className="mascot-float mx-auto mb-4 size-16 opacity-90" />
+      )}
       <p className="text-sm font-medium">{title}</p>
-      <p className="mx-auto mt-1.5 max-w-md text-xs leading-5 text-muted">{body}</p>
+      {body ? (
+        <p className="mx-auto mt-1.5 max-w-md text-xs leading-5 text-muted">{body}</p>
+      ) : null}
       {action ? <div className="mt-4 flex justify-center">{action}</div> : null}
     </div>
   );

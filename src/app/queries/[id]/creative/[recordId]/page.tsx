@@ -2,7 +2,9 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Bookmark, ExternalLink } from "lucide-react";
+import { ArrowLeft, ArrowSquareOut, BookmarkSimple } from "@phosphor-icons/react";
+import { fetchWithHash, readCache } from "@/lib/client-cache";
+import { DitherLoader } from "@/components/dither-loader";
 import { Button, Card, CardHeader, PlatformMark, RoleBadge, Stat } from "@/components/ui";
 import { CreativeCard } from "@/components/creative-card";
 import { resultRowsToRecords } from "@/lib/export";
@@ -39,15 +41,21 @@ export default function CreativeDetailPage() {
   const collections = useCollections();
 
   useEffect(() => {
-    fetch(`/api/queries/${params.id}`, { cache: "no-store" })
-      .then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.message ?? "Failed to load");
-        setQuery(payload.query);
+    let cancelled = false;
+    const cacheKey = `query:${params.id}`;
+    const cached = readCache<{ query?: QueryPayload }>(cacheKey);
+    if (cached?.data.query) setQuery(cached.data.query);
+    fetchWithHash<{ query: QueryPayload }>(cacheKey, `/api/queries/${params.id}`)
+      .then((result) => {
+        if (cancelled || !result) return;
+        setQuery(result.data.query);
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Failed to load"),
       );
+    return () => {
+      cancelled = true;
+    };
   }, [params.id]);
 
   const records = useMemo(
@@ -91,7 +99,7 @@ export default function CreativeDetailPage() {
     );
   }
   if (!query) {
-    return <div className="h-64 animate-pulse rounded-lg bg-white/[.04]" />;
+    return <DitherLoader label="Loading creative" className="mt-10" />;
   }
   if (!record) {
     return (
@@ -100,7 +108,7 @@ export default function CreativeDetailPage() {
           onClick={() => router.push(`/queries/${query.id}`)}
           className="flex items-center gap-1.5 text-xs text-muted hover:text-foreground"
         >
-          <ArrowLeft className="size-3.5" /> Back to run
+          <ArrowLeft size={14} /> Back to run
         </button>
         <p className="text-sm text-muted">This creative is no longer part of the run.</p>
       </div>
@@ -118,7 +126,7 @@ export default function CreativeDetailPage() {
         onClick={() => router.push(`/queries/${query.id}`)}
         className="flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-foreground"
       >
-        <ArrowLeft className="size-3.5" /> Back to run
+        <ArrowLeft size={14} /> Back to run
       </button>
 
       <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
@@ -196,7 +204,7 @@ export default function CreativeDetailPage() {
             {record.url ? (
               <a href={record.url} target="_blank" rel="noreferrer noopener">
                 <Button size="sm">
-                  <ExternalLink className="size-3.5" /> Open original
+                  <ArrowSquareOut size={14} /> Open original
                 </Button>
               </a>
             ) : null}
@@ -212,7 +220,7 @@ export default function CreativeDetailPage() {
                 })
               }
             >
-              <Bookmark className="size-3.5" />
+              <BookmarkSimple size={14} weight={isSaved ? "fill" : "regular"} />
               {isSaved ? "Saved" : "Save to collection"}
             </Button>
           </div>

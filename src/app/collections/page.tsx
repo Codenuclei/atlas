@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { BookmarkSimple } from "@phosphor-icons/react";
 import { useCollections } from "@/lib/collections";
 import { CreativeCard } from "@/components/creative-card";
 import { EmptyState, SectionHeading } from "@/components/ui";
@@ -12,7 +13,12 @@ export default function CollectionsPage() {
   return (
     <main className="space-y-5">
       <SectionHeading
-        title="Saved creatives"
+        title={
+          <span className="flex items-center gap-2">
+            <BookmarkSimple size={16} weight="fill" className="text-accent" />
+            Saved creatives
+          </span>
+        }
         meta={`${saved.length} saved across runs`}
       />
       {saved.length === 0 ? (
@@ -27,8 +33,12 @@ export default function CollectionsPage() {
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {saved.map((item) => (
-            <div key={item.key} className="space-y-1.5">
+          {saved.map((item, index) => (
+            <div
+              key={item.key}
+              className="rise space-y-1.5"
+              style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
+            >
               <CreativeCard
                 record={item.record}
                 role={item.role}

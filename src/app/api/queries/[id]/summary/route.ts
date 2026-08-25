@@ -1,7 +1,9 @@
 import { db } from "@/lib/db";
 import { LIST_HASH_KEY, detailHashKey, touchDataHash } from "@/lib/data-hash";
 import { streamSummary } from "@/lib/ai/synthesize";
+import { logClaude } from "@/lib/ai/claude-log";
 import { resultRowsToRecords } from "@/lib/export";
+import { isTerminalQueryStatus } from "@/lib/status";
 import { AppError, errorToResponse } from "@/lib/errors";
 import { guardMutation } from "@/lib/request-security";
 
@@ -15,21 +17,40 @@ export async function POST(
   try {
     guardMutation(request, "summary", 4);
     const { id } = await context.params;
+    const force =
+      new URL(request.url).searchParams.get("force") === "1" ||
+      new URL(request.url).searchParams.get("regenerate") === "1";
     const query = await db.query.findUnique({
       where: { id },
       include: { results: true },
     });
     if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
-    if (query.status !== "succeeded") {
+    if (!isTerminalQueryStatus(query.status)) {
       throw new AppError(
         "BAD_REQUEST",
-        "A brief can only be generated after the scrape succeeds.",
+        "A brief can only be generated after the run finishes.",
         400,
       );
     }
-    if (query.summary) {
+    if (query.results.length === 0) {
+      throw new AppError(
+        "BAD_REQUEST",
+        "No collected results to synthesize a brief from.",
+        400,
+      );
+    }
+    if (query.summary && !force) {
+      logClaude("stream_summary.cached", { queryId: id });
       return Response.json({ summary: query.summary, cached: true });
     }
+
+    if (force && query.summary) {
+      await db.query.update({
+        where: { id },
+        data: { summary: null, synthesisStartedAt: null },
+      });
+    }
+
     const claim = await db.query.updateMany({
       where: { id, summary: null, synthesisStartedAt: null },
       data: { synthesisStartedAt: new Date() },
@@ -53,6 +74,7 @@ export async function POST(
             query.text,
             resultRowsToRecords(query.results),
             write,
+            { queryId: id, trigger: force ? "regenerate" : "manual" },
           );
           await db.query.update({ where: { id }, data: { summary } });
           await touchDataHash(LIST_HASH_KEY, detailHashKey(id));

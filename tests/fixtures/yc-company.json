@@ -4,9 +4,23 @@
   "name": "Stripe",
   "slug": "stripe",
   "website": "https://stripe.com",
+  "oneLiner": "Payments infrastructure",
   "one_liner": "Payments infrastructure",
+  "location": "San Francisco, CA, USA",
   "all_locations": "San Francisco, CA, USA",
   "small_logo_thumb_url": "https://example.com/stripe.png",
   "batch": "Summer 2009",
-  "industry": "Fintech"
+  "industry": "Fintech",
+  "founders": [
+    {
+      "name": "Patrick Collison",
+      "title": "CEO",
+      "linkedinUrl": "https://www.linkedin.com/in/patrick-collison"
+    },
+    {
+      "name": "John Collison",
+      "title": "President",
+      "linkedinUrl": "https://www.linkedin.com/in/john-collison"
+    }
+  ]
 }

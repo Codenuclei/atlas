@@ -1,4 +1,4 @@
-import type { ScrapedRecord } from "@/lib/normalize";
+import { firstText, type ScrapedRecord } from "@/lib/normalize";
 
 export function normalizeName(value: string): string {
   return value
@@ -22,6 +22,12 @@ export function mergeKeyFor(record: ScrapedRecord): string {
   return `${record.sourceType}:${record.externalId}`;
 }
 
+function founderLinkedInUrl(founder: unknown): string {
+  if (!founder || typeof founder !== "object") return "";
+  const raw = founder as Record<string, unknown>;
+  return firstText(raw.linkedinUrl, raw.linkedin);
+}
+
 export function extractLinkedInUrls(
   records: ScrapedRecord[],
   kind: "profile" | "company",
@@ -39,6 +45,14 @@ export function extractLinkedInUrls(
       urls.add(record.title);
     } else if (record.title && !record.url) {
       urls.add(`${prefix}${normalizeName(record.title).replaceAll(" ", "-")}`);
+    }
+
+    if (kind === "profile" && record.sourceType === "yc") {
+      const founders = Array.isArray(record.raw.founders) ? record.raw.founders : [];
+      for (const founder of founders) {
+        const linkedin = founderLinkedInUrl(founder);
+        if (linkedin.includes("linkedin.com/in/")) urls.add(linkedin);
+      }
     }
   }
   return [...urls];

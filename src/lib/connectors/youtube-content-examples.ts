@@ -38,7 +38,7 @@ export const youtubeContentExamplesConnector: Connector<YoutubeContentExamplesIn
           maxResults: maxItems,
           maxResultsShorts: 0,
           maxResultStreams: 0,
-          sortingOrder: "viewCount",
+          sortingOrder: "views",
         },
       };
     },

@@ -18,13 +18,47 @@ import type { BoardRecord } from "@/components/creatives-board";
 type SortKey = "title" | "views" | "rate" | "comments" | "age" | "match";
 
 const COLUMNS: Array<{ id: SortKey; label: string; align?: "right" }> = [
-  { id: "title", label: "Creative" },
-  { id: "views", label: "Views", align: "right" },
-  { id: "rate", label: "Eng. rate", align: "right" },
+  { id: "title", label: "Record" },
+  { id: "views", label: "Views / Batch", align: "right" },
+  { id: "rate", label: "Eng. / Industry", align: "right" },
   { id: "comments", label: "Comments", align: "right" },
-  { id: "age", label: "Age", align: "right" },
+  { id: "age", label: "Age / Loc", align: "right" },
   { id: "match", label: "Match", align: "right" },
 ];
+
+function ycMetaLeft(record: ScrapedRecord): string {
+  if (record.sourceType === "yc") {
+    return String(record.raw.batch ?? record.raw.batchCode ?? "—");
+  }
+  if (record.sourceType === "profile") {
+    return String(record.raw.companyBatch ?? "—");
+  }
+  return "—";
+}
+
+function ycMetaMid(record: ScrapedRecord): string {
+  if (record.sourceType === "yc") {
+    const industry =
+      firstRawText(record.raw.industry) ||
+      firstRawText(record.raw.subindustry) ||
+      (Array.isArray(record.raw.industries)
+        ? firstRawText(record.raw.industries[0])
+        : "");
+    return industry || "—";
+  }
+  if (record.sourceType === "profile") {
+    return (
+      firstRawText(record.raw.companyIndustry) ||
+      firstRawText(record.raw.founderTitle) ||
+      "—"
+    );
+  }
+  return "—";
+}
+
+function firstRawText(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
 
 export function EvidenceTable({
   items,
@@ -186,33 +220,70 @@ export function EvidenceTable({
                     />
                   </td>
                   <td className={cn("max-w-0 px-3", compact ? "py-1" : "py-2")}>
-                    <a
-                      href={`/queries/${queryId}/creative/${encodeURIComponent(item.record.externalId)}`}
-                      className="block"
-                    >
-                      <span className="block truncate text-[13px] font-medium hover:text-accent">
-                        {item.record.title || "Untitled"}
-                      </span>
+                    <div className="block">
+                      {item.record.sourceType === "profile" &&
+                      item.record.url.includes("linkedin.com") ? (
+                        <a
+                          href={item.record.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block truncate text-[13px] font-medium text-accent hover:underline"
+                        >
+                          {item.record.title || "Untitled"}
+                        </a>
+                      ) : (
+                        <a
+                          href={`/queries/${queryId}/creative/${encodeURIComponent(item.record.externalId)}`}
+                          className="block truncate text-[13px] font-medium hover:text-accent"
+                        >
+                          {item.record.title || "Untitled"}
+                        </a>
+                      )}
                       <span className="mt-0.5 flex items-center gap-2 text-[11px] text-faint">
                         {platformLabel(item.record)}
                         <RoleBadge role={item.role} />
-                        {engagement.creator ? (
+                        {item.record.sourceType === "yc" ? (
+                          <span className="truncate">{item.record.subtitle}</span>
+                        ) : engagement.creator ? (
                           <span className="truncate">{engagement.creator}</span>
                         ) : null}
                       </span>
-                    </a>
+                      {item.record.sourceType === "profile" &&
+                      item.record.url.includes("linkedin.com") ? (
+                        <a
+                          href={item.record.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-0.5 block truncate text-[11px] text-accent/80 hover:underline"
+                        >
+                          Open LinkedIn profile
+                        </a>
+                      ) : null}
+                    </div>
                   </td>
                   <td className={cn("tnum px-3 text-right text-[12px]", compact ? "py-1" : "py-2")}>
-                    {formatCompact(engagement.views)}
+                    {item.record.sourceType === "yc" ||
+                    item.record.sourceType === "profile"
+                      ? ycMetaLeft(item.record)
+                      : formatCompact(engagement.views)}
                   </td>
                   <td className={cn("tnum px-3 text-right text-[12px]", compact ? "py-1" : "py-2")}>
-                    {formatRate(engagement.rate)}
+                    {item.record.sourceType === "yc" ||
+                    item.record.sourceType === "profile"
+                      ? ycMetaMid(item.record)
+                      : formatRate(engagement.rate)}
                   </td>
                   <td className={cn("tnum px-3 text-right text-[12px]", compact ? "py-1" : "py-2")}>
-                    {formatCompact(engagement.comments)}
+                    {item.record.sourceType === "yc" ||
+                    item.record.sourceType === "profile"
+                      ? "—"
+                      : formatCompact(engagement.comments)}
                   </td>
                   <td className={cn("tnum px-3 text-right text-[12px] text-muted", compact ? "py-1" : "py-2")}>
-                    {formatAge(engagement.publishedAt) || "—"}
+                    {item.record.sourceType === "yc" ||
+                    item.record.sourceType === "profile"
+                      ? item.record.location || "—"
+                      : formatAge(engagement.publishedAt) || "—"}
                   </td>
                   <td className={cn("tnum px-3 text-right text-[12px]", compact ? "py-1" : "py-2")}>
                     {item.record.score != null

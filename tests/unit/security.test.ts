@@ -47,6 +47,18 @@ describe("security boundaries", () => {
     expect(() => assertSameOrigin(request)).toThrow(/Cross-origin/);
   });
 
+  it("allows public origin when proxied behind a different upstream host", () => {
+    const request = new Request("http://127.0.0.1:8080/api/plan", {
+      headers: {
+        origin: "https://azure-condor-drafting.cohesivity.app",
+        host: "127.0.0.1:8080",
+        "x-forwarded-host": "azure-condor-drafting.cohesivity.app",
+        "x-forwarded-proto": "https",
+      },
+    });
+    expect(() => assertSameOrigin(request)).not.toThrow();
+  });
+
   it("allows localhost but blocks remote API access without a token", () => {
     expect(() =>
       assertApiAccess(new Request("http://localhost:3000/api/health")),

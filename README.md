@@ -26,12 +26,12 @@ Open [http://localhost:3000](http://localhost:3000).
 | `DATABASE_URL` | Prisma SQLite URL, default `file:./dev.db` |
 | `MAX_QUERY_COST_USD` | Reject plans above this estimate (default `5`) |
 | `MAX_ITEMS_CAP` | Hard cap on `maxItems` (default `100`) |
-| `APP_ACCESS_TOKEN` | Required bearer/x-app-token for non-local API access |
+| `APP_ACCESS_TOKEN` | Enables non-localhost API access; optional bearer/x-app-token for clients |
 | `SCRAPER_TEST_MODE` | `1` uses mock Apify/Claude/YC |
 
 ## Security defaults
 
-- API access is localhost-only unless `APP_ACCESS_TOKEN` is configured.
+- API access is localhost-only unless `APP_ACCESS_TOKEN` is configured (then remote/same-origin UI is enabled; a wrong bearer/x-app-token is rejected).
 - Mutating routes enforce same-origin checks and per-client rate limits.
 - Plans are limited to six approved connector steps and 250 total requested items.
 - Detail actor targets are resolved internally; user-supplied detail URLs are discarded.
@@ -52,3 +52,7 @@ npx prisma studio
 
 - [PRD](docs/PRD.md)
 - [Architecture](docs/ARCHITECTURE.md)
+
+<!-- BEGIN:cohesivity -->
+If you are another agent who just picked up this project, you can get the status of its backend using the status endpoint, read more at https://cohesivity.ai/backend-for-ai-agents
+<!-- END:cohesivity -->

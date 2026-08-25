@@ -8,7 +8,7 @@ type MockRun = ActorRunLike & {
 const runs = new Map<string, MockRun>();
 
 function sampleItems(actorId: string, input: Record<string, unknown>) {
-  if (actorId.includes("ycombinator") || actorId.includes("yc-companies")) {
+  if (actorId.includes("apivault") || actorId.includes("yc-companies")) {
     return [
       {
         id: 1,
@@ -16,17 +16,29 @@ function sampleItems(actorId: string, input: Record<string, unknown>) {
         name: "Ramp",
         slug: "ramp",
         website: "https://ramp.com",
-        one_liner: "Corporate cards and spend management",
-        all_locations: "New York, NY, USA",
+        oneLiner: "Corporate cards and spend management",
+        location: "New York, NY, USA",
         batch: "Winter 2020",
         industry: "Fintech",
         isHiring: true,
         ycUrl: "https://www.ycombinator.com/companies/ramp",
+        founders: [
+          {
+            name: "Eric Glyman",
+            title: "CEO",
+            linkedinUrl: "https://www.linkedin.com/in/eglyman",
+          },
+          {
+            name: "Karim Atiyeh",
+            title: "CTO",
+            linkedinUrl: "https://www.linkedin.com/in/karimatiyeh",
+          },
+        ],
       },
     ];
   }
   if (actorId.includes("youtube")) {
-    if (input.sortingOrder === "viewCount") {
+    if (input.sortingOrder === "views") {
       return [
         {
           videoId: "reference-1",

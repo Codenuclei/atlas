@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
+  ArrowCounterClockwise,
   ArrowLeft,
   Article,
   Check,
@@ -70,6 +71,7 @@ export default function QueryPage() {
   const [activeTab, setActiveTab] = useState<Tab | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [pollEpoch, setPollEpoch] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
   const collections = useCollections();
 
@@ -122,7 +124,7 @@ export default function QueryPage() {
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.id]);
+  }, [params.id, pollEpoch]);
 
   useEffect(() => {
     function onClickOutside(event: MouseEvent) {
@@ -153,6 +155,14 @@ export default function QueryPage() {
 
   const hasContent = records.some(isContentRecord);
   const running = query ? !isTerminalQueryStatus(query.status) : false;
+  const canSynthesizeBrief = query
+    ? isTerminalQueryStatus(query.status) && records.length > 0
+    : false;
+  const failedJobs = query
+    ? query.jobs.filter(
+        (job) => job.status === "failed" || job.status === "timed_out",
+      )
+    : [];
   const resolvedTab: Tab =
     activeTab ?? (hasContent || running ? "creatives" : "brief");
 
@@ -162,12 +172,33 @@ export default function QueryPage() {
     setActionPending("");
   }
 
-  async function streamBrief() {
+  async function regenerateBrief() {
     setSummary("");
     setActionPending("brief");
-    const response = await fetch(`/api/queries/${params.id}/summary`, {
-      method: "POST",
-    });
+    invalidateCache(`query:${params.id}`);
+    const response = await fetch(
+      `/api/queries/${params.id}/regenerate-brief`,
+      { method: "POST" },
+    );
+    const payload = await response.json();
+    if (response.ok) {
+      setQuery(payload.query);
+      setSummary(payload.query.summary ?? "");
+      setPollEpoch((value) => value + 1);
+    } else {
+      setError(payload.message ?? "Could not regenerate brief");
+    }
+    setActionPending("");
+  }
+
+  async function streamBrief(force = false) {
+    setSummary("");
+    setActionPending("brief");
+    invalidateCache(`query:${params.id}`);
+    const response = await fetch(
+      `/api/queries/${params.id}/summary${force ? "?force=1" : ""}`,
+      { method: "POST" },
+    );
     if (response.headers.get("content-type")?.includes("application/json")) {
       const payload = await response.json();
       if (payload.summary) setSummary(payload.summary);
@@ -197,6 +228,23 @@ export default function QueryPage() {
           // keepalive lines
         }
       }
+    }
+    setActionPending("");
+  }
+
+  async function retryFailed() {
+    setActionPending("retry-failed");
+    invalidateCache(`query:${params.id}`);
+    const response = await fetch(`/api/queries/${params.id}/retry-failed`, {
+      method: "POST",
+    });
+    const payload = await response.json();
+    if (response.ok) {
+      setQuery(payload.query);
+      setSummary("");
+      setPollEpoch((value) => value + 1);
+    } else {
+      setError(payload.message ?? "Could not retry failed steps");
     }
     setActionPending("");
   }
@@ -297,6 +345,22 @@ export default function QueryPage() {
               <DownloadSimple size={15} />
             </Button>
           </a>
+          {!running && failedJobs.length > 0 ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={retryFailed}
+              disabled={Boolean(actionPending)}
+              className="tip px-2.5"
+              data-tip="Retry failed steps"
+              aria-label="Retry failed steps"
+            >
+              <ArrowCounterClockwise
+                size={15}
+                className={actionPending === "retry-failed" ? "animate-spin" : undefined}
+              />
+            </Button>
+          ) : null}
           {!running ? (
             <Button
               variant="secondary"
@@ -360,6 +424,8 @@ export default function QueryPage() {
           queryStatus={query.status}
           onStop={stopRun}
           stopPending={actionPending === "stop"}
+          onRetryFailed={failedJobs.length > 0 ? retryFailed : undefined}
+          retryFailedPending={actionPending === "retry-failed"}
         />
       ) : null}
 
@@ -403,15 +469,18 @@ export default function QueryPage() {
             <p className="text-[11px] text-faint">
               Grounded in {records.length} collected records
             </p>
-            {!summary && query.status === "succeeded" ? (
+            {canSynthesizeBrief ? (
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={streamBrief}
-                disabled={!records.length || Boolean(actionPending)}
+                onClick={regenerateBrief}
+                disabled={Boolean(actionPending)}
               >
-                <Article size={13} />
-                {actionPending === "brief" ? "Writing…" : "Generate brief"}
+                <ArrowClockwise
+                  size={13}
+                  className={actionPending === "brief" ? "animate-spin" : undefined}
+                />
+                {actionPending === "brief" ? "Regenerating…" : "Regenerate brief"}
               </Button>
             ) : null}
           </div>
@@ -420,14 +489,16 @@ export default function QueryPage() {
           ) : (
             <EmptyState
               title={
-                query.status === "succeeded"
+                canSynthesizeBrief
                   ? "Brief not generated yet"
                   : "Brief available when the run completes"
               }
               body={
-                query.status === "succeeded"
-                  ? "Generate a brief grounded in the collected evidence. Every claim traces back to the records in the Evidence tab."
-                  : "The brief is written from collected records once all steps finish. Partial results are never summarized as if complete."
+                canSynthesizeBrief
+                  ? "Regenerate a brief from the collected evidence. Claude API calls are logged in the server terminal as [claude]."
+                  : running
+                    ? "The brief will be generated automatically once all steps finish."
+                    : "Collect evidence first, then regenerate the brief from the Brief tab."
               }
             />
           )}

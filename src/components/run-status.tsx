@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CaretDown, HandPalm } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, CaretDown, HandPalm } from "@phosphor-icons/react";
 import { isTerminalJobStatus } from "@/lib/status";
 import { displayStatus, jobStageLabel } from "@/lib/view-model";
 import { DitherField } from "@/components/dither-loader";
@@ -35,11 +35,15 @@ export function RunStatus({
   queryStatus,
   onStop,
   stopPending,
+  onRetryFailed,
+  retryFailedPending,
 }: {
   jobs: JobRow[];
   queryStatus: string;
   onStop: () => void;
   stopPending: boolean;
+  onRetryFailed?: () => void;
+  retryFailedPending?: boolean;
 }) {
   const [showTechnical, setShowTechnical] = useState(false);
   const finished = jobs.filter((job) => isTerminalJobStatus(job.status)).length;
@@ -119,8 +123,27 @@ export function RunStatus({
               {failed[0]?.error ? (
                 <span className="text-faint">Cause: {failed[0].error}. </span>
               ) : null}
-              {!running ? "Use Run again to retry the full plan." : null}
+              {!running
+                ? "Retry the failed steps below, or use Run again for a full rerun."
+                : null}
             </p>
+            {!running && onRetryFailed ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-3"
+                onClick={onRetryFailed}
+                disabled={retryFailedPending}
+              >
+                <ArrowCounterClockwise
+                  size={13}
+                  className={retryFailedPending ? "animate-spin" : undefined}
+                />
+                {retryFailedPending
+                  ? "Retrying…"
+                  : `Retry failed step${failed.length === 1 ? "" : "s"}`}
+              </Button>
+            ) : null}
           </div>
         ) : null}
 

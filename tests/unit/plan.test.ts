@@ -150,6 +150,38 @@ describe("heuristic planner", () => {
     expect(plan.steps[0].connectorId).toBe("yc-companies");
   });
 
+  it("plans YC Summer 2026 fintech with batch+industry and no LinkedIn search by default", () => {
+    const plan = heuristicPlan("YC Summer 2026 fintech companies");
+    expect(plan.steps.map((s) => s.connectorId)).toEqual(["yc-companies"]);
+    expect(plan.steps[0].params).toMatchObject({
+      batch: "Summer 2026",
+      industry: "Fintech",
+    });
+    expect(
+      plan.steps.some((s) => s.connectorId === "linkedin-profile-search"),
+    ).toBe(false);
+  });
+
+  it("plans YC current batch founders with yc-companies only", () => {
+    const plan = heuristicPlan("YC current batch founders");
+    expect(plan.steps.map((s) => s.connectorId)).toEqual(["yc-companies"]);
+    expect(plan.steps[0].params.batch).toBeTruthy();
+    expect(
+      plan.steps.some((s) => s.connectorId === "linkedin-profile-search"),
+    ).toBe(false);
+  });
+
+  it("adds linkedin-profile-search for deeper LinkedIn enrichment", () => {
+    const plan = heuristicPlan(
+      "YC Summer 2026 fintech founders with deeper LinkedIn enrichment",
+    );
+    expect(plan.steps.map((s) => s.connectorId)).toEqual([
+      "yc-companies",
+      "linkedin-profile-search",
+    ]);
+    expect(plan.steps[1].dependsOn).toEqual(["yc-companies"]);
+  });
+
   it("builds a generic cross-platform content plan", () => {
     const plan = heuristicPlan(
       "Analyze Example Brand content across YouTube and Instagram",

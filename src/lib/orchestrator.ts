@@ -4,14 +4,22 @@ import { getApify } from "@/lib/apify/client";
 import { getConnector } from "@/lib/connectors/registry";
 import { validatePlan } from "@/lib/ai/planner";
 import { estimatePlanCost } from "@/lib/ai/cost";
-import { scoreResults } from "@/lib/ai/synthesize";
+import { generateBrief, scoreResults } from "@/lib/ai/synthesize";
+import { logClaude, logClaudeError } from "@/lib/ai/claude-log";
 import { extractLinkedInUrls, mergeKeyFor, mergeRecords } from "@/lib/resolve";
+import {
+  expandYcFounders,
+  enrichYcCompaniesInput,
+  ycCompanyNames,
+  type YcCompaniesInput,
+} from "@/lib/connectors/yc-companies";
 import type { ScrapePlan } from "@/lib/ai/plan-schema";
 import { sanitizeForSqliteJson, type ScrapedRecord } from "@/lib/normalize";
 import {
   deriveQueryStatus,
   isActiveJobStatus,
   isTerminalJobStatus,
+  isTerminalQueryStatus,
   mapApifyStatus,
 } from "@/lib/status";
 import { AppError } from "@/lib/errors";
@@ -34,6 +42,15 @@ function parseParams(connectorId: string, params: unknown) {
 
 export async function createQueryFromPlan(text: string, planInput: ScrapePlan) {
   const plan = validatePlan(planInput);
+  // Never trust empty Claude yc-companies params — derive batch/industry/keywords
+  // from the user request so we don't fall back to dumping raw text into Apify.
+  for (const step of plan.steps) {
+    if (step.connectorId !== "yc-companies") continue;
+    step.params = enrichYcCompaniesInput(
+      step.params as YcCompaniesInput,
+      text,
+    ) as Record<string, unknown>;
+  }
   const estimate = estimatePlanCost(plan);
   const query = await db.query.create({
     data: {
@@ -146,15 +163,19 @@ async function startJob(jobId: string): Promise<boolean> {
   if (claimed.count === 0) return false;
   try {
   const connector = getConnector(job.connectorId);
+  const plan = job.query.plan as ScrapePlan;
+  const stepDependsOn = plan.steps[job.stepIndex]?.dependsOn ?? [];
   let params = hydrateDetailParams(
     connector.id,
     job.input,
     job.query.results.map((row) => row.data as ScrapedRecord),
+    stepDependsOn,
   );
     if (connector.id === "yc-companies") {
-    const yc = { ...(params as Record<string, unknown>) };
-    if (!yc.query) yc.query = job.query.text;
-      params = yc;
+      params = enrichYcCompaniesInput(
+        params as YcCompaniesInput,
+        job.query.text,
+      ) as Record<string, unknown>;
     }
     if (connector.id === "youtube-content-examples") {
       const examples = { ...(params as Record<string, unknown>) };
@@ -227,6 +248,7 @@ function hydrateDetailParams(
   connectorId: string,
   input: unknown,
   existing: ScrapedRecord[],
+  dependsOn: string[] = [],
 ) {
   const params = { ...(input as Record<string, unknown>) };
   if (connectorId === "linkedin-profile") {
@@ -239,6 +261,25 @@ function hydrateDetailParams(
     const companies = Array.isArray(params.companies) ? params.companies.map(String) : [];
     if (companies.length === 0) {
       params.companies = extractLinkedInUrls(existing, "company");
+    }
+  }
+  if (connectorId === "linkedin-profile-search") {
+    const companies = Array.isArray(params.currentCompanies)
+      ? params.currentCompanies.map(String).filter(Boolean)
+      : [];
+    const ycNames = ycCompanyNames(existing);
+    // Prefer YC company titles when empty, or when this step depends on yc-companies.
+    if (
+      ycNames.length > 0 &&
+      (companies.length === 0 || dependsOn.includes("yc-companies"))
+    ) {
+      params.currentCompanies = ycNames.slice(0, 15);
+    }
+    const titles = Array.isArray(params.currentJobTitles)
+      ? params.currentJobTitles.map(String).filter(Boolean)
+      : [];
+    if (titles.length === 0) {
+      params.currentJobTitles = ["Founder", "Co-Founder", "CEO"];
     }
   }
   return params;
@@ -425,6 +466,10 @@ async function ingestDataset(jobId: string) {
     offset += page.items.length;
     if (page.items.length === 0) break;
   } while (offset < total);
+  if (connector.id === "yc-companies") {
+    const founders = records.flatMap((record) => expandYcFounders(record));
+    records.push(...founders);
+  }
   await ingestRecords(job.queryId, job.id, records);
   await db.job.update({
     where: { id: job.id },
@@ -487,10 +532,14 @@ export async function syncQuery(queryId: string) {
     if (claim.count > 0) {
       dirty = true;
       try {
-        const synthesis = await scoreResults(
-          fresh.text,
-          fresh.results.map((row) => row.data as ScrapedRecord),
-        );
+        const records = fresh.results.map((row) => row.data as ScrapedRecord);
+        const ctx = { queryId, trigger: "auto" as const };
+        const [brief, synthesis] = await Promise.all([
+          generateBrief(fresh.text, records, ctx).catch(() => ""),
+          scoreResults(fresh.text, records, ctx),
+        ]);
+        const summary =
+          brief.length > 400 ? brief : synthesis.summary;
         for (const score of synthesis.scores) {
           const match = fresh.results.find(
             (row) => row.externalId === score.externalId,
@@ -504,7 +553,7 @@ export async function syncQuery(queryId: string) {
         }
         await db.query.update({
           where: { id: queryId },
-          data: { summary: synthesis.summary, status: nextStatus },
+          data: { summary, status: nextStatus },
         });
       } catch (error) {
         console.error("Result synthesis failed", error);
@@ -554,6 +603,131 @@ export async function rerunQuery(queryId: string) {
   const query = await db.query.findUnique({ where: { id: queryId } });
   if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
   return createQueryFromPlan(query.text, query.plan as ScrapePlan);
+}
+
+export async function regenerateBrief(queryId: string) {
+  const query = await db.query.findUnique({
+    where: { id: queryId },
+    include: { results: true, jobs: { orderBy: { stepIndex: "asc" } } },
+  });
+  if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
+  if (!isTerminalQueryStatus(query.status)) {
+    throw new AppError("BAD_REQUEST", "Run is still in progress.", 400);
+  }
+  if (query.results.length === 0) {
+    throw new AppError(
+      "BAD_REQUEST",
+      "No collected results to synthesize a brief from.",
+      400,
+    );
+  }
+
+  logClaude("regenerate_brief.start", {
+    queryId,
+    queryStatus: query.status,
+    resultCount: query.results.length,
+    hadSummary: Boolean(query.summary),
+  });
+
+  await db.query.update({
+    where: { id: queryId },
+    data: { summary: null, synthesisStartedAt: new Date() },
+  });
+
+  try {
+    const records = query.results.map((row) => row.data as ScrapedRecord);
+    const ctx = { queryId, trigger: "regenerate" as const };
+    const [brief, synthesis] = await Promise.all([
+      generateBrief(query.text, records, ctx).catch(() => ""),
+      scoreResults(query.text, records, ctx),
+    ]);
+    const summary = brief.length > 400 ? brief : synthesis.summary;
+
+    for (const score of synthesis.scores) {
+      const match = query.results.find(
+        (row) => row.externalId === score.externalId,
+      );
+      if (match) {
+        await db.result.update({
+          where: { id: match.id },
+          data: { score: score.score },
+        });
+      }
+    }
+
+    await db.query.update({
+      where: { id: queryId },
+      data: { summary, synthesisStartedAt: null },
+    });
+
+    await touchDataHash(LIST_HASH_KEY, detailHashKey(queryId));
+
+    logClaude("regenerate_brief.done", {
+      queryId,
+      summaryLength: summary.length,
+      scoreCount: synthesis.scores.length,
+      usedFallback: summary.includes("Claude synthesis was unavailable"),
+      source: brief.length > 400 ? "stream" : "structured",
+    });
+
+    return getQuery(queryId);
+  } catch (error) {
+    logClaudeError("regenerate_brief.failed", error, { queryId });
+    await db.query.update({
+      where: { id: queryId },
+      data: { synthesisStartedAt: null },
+    });
+    throw error;
+  }
+}
+
+export async function retryFailedJobs(queryId: string) {
+  const query = await db.query.findUnique({
+    where: { id: queryId },
+    include: { jobs: { orderBy: { stepIndex: "asc" } } },
+  });
+  if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
+  if (!isTerminalQueryStatus(query.status)) {
+    throw new AppError("BAD_REQUEST", "Run is still in progress.", 400);
+  }
+
+  const retryable = query.jobs.filter(
+    (job) => job.status === "failed" || job.status === "timed_out",
+  );
+  if (!retryable.length) {
+    throw new AppError("BAD_REQUEST", "No failed steps to retry.", 400);
+  }
+
+  const retryIds = retryable.map((job) => job.id);
+
+  await db.result.deleteMany({
+    where: { jobId: { in: retryIds } },
+  });
+
+  await db.job.updateMany({
+    where: { id: { in: retryIds } },
+    data: {
+      status: "queued",
+      apifyRunId: null,
+      apifyDatasetId: null,
+      error: null,
+      finishedAt: null,
+      itemCount: 0,
+    },
+  });
+
+  await db.query.update({
+    where: { id: queryId },
+    data: {
+      status: "running",
+      summary: null,
+      synthesisStartedAt: null,
+    },
+  });
+
+  await touchDataHash(LIST_HASH_KEY, detailHashKey(queryId));
+  await kickReadyJobs(queryId);
+  return syncQuery(queryId);
 }
 
 export async function deleteQuery(queryId: string) {

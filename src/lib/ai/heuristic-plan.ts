@@ -1,4 +1,9 @@
 import type { ScrapePlan } from "@/lib/ai/plan-schema";
+import {
+  parseYcBatch,
+  parseYcIndustry,
+  ycKeywordsFrom,
+} from "@/lib/connectors/yc-companies";
 
 export function heuristicPlan(query: string): ScrapePlan {
   const text = query.toLowerCase();
@@ -16,6 +21,8 @@ export function heuristicPlan(query: string): ScrapePlan {
     /\bcontent\b|\bchannels?\b|\bvideos?\b|\bposts?\b|\bperformance\b|\bengagement\b/.test(
       text,
     );
+  const wantsDeeperLinkedin =
+    /\bdeeper\s+linkedin\b|\benrich\s+profiles?\b|\blinkedin\b/.test(text);
 
   if (wantsContent) {
     const youtubeUrls = extractYoutubeUrls(query);
@@ -109,61 +116,79 @@ export function heuristicPlan(query: string): ScrapePlan {
     };
   }
 
-  if (wantsYc && wantsPeople) {
+  if (wantsYc) {
+    const batch = parseYcBatch(query);
+    const industry = parseYcIndustry(query);
+    const cleanedQuery = ycKeywordsFrom(query);
+    const isHiring = /\bhiring\b|\bhire\b/.test(text);
+    const ycParams: Record<string, unknown> = {
+      isHiring,
+      maxItems: 50,
+    };
+    if (cleanedQuery && cleanedQuery.toLowerCase() !== industry?.toLowerCase()) {
+      ycParams.query = cleanedQuery;
+    }
+    if (batch) ycParams.batch = batch;
+    if (industry) ycParams.industry = industry;
+
+    const addLinkedin =
+      wantsDeeperLinkedin || (wantsPeople && /\blinkedin\b/.test(text));
+
+    const steps: ScrapePlan["steps"] = [
+      {
+        connectorId: "yc-companies",
+        purpose: wantsPeople
+          ? "Find matching YC companies and founders"
+          : "Find matching YC companies",
+        dependsOn: [],
+        params: ycParams,
+      },
+    ];
+
+    if (addLinkedin) {
+      steps.push({
+        connectorId: "linkedin-profile-search",
+        purpose: "Enrich founder profiles on LinkedIn",
+        dependsOn: ["yc-companies"],
+        params: {
+          searchQuery: peopleQueryFrom(query) || "founder",
+          currentJobTitles: ["Founder", "Co-Founder", "CEO"],
+          currentCompanies: [],
+          locations: locationFrom(query),
+          maxItems: 20,
+        },
+      });
+    }
+
     return {
-      interpretation: `Find YC companies matching the query, then search LinkedIn for related people.`,
-      intent: "mixed",
-      expectedResultType: "mixed",
+      interpretation: addLinkedin
+        ? `Find YC companies matching the query, then deepen LinkedIn research for founders.`
+        : wantsPeople
+          ? `Find YC companies and founders matching "${query}" (founders from the YC directory).`
+          : `Search the YC directory for "${query}".`,
+      intent: addLinkedin || wantsPeople ? "mixed" : "companies",
+      expectedResultType: addLinkedin || wantsPeople ? "mixed" : "companies",
       clarificationNeeded: "",
-      steps: [
-        {
-          connectorId: "yc-companies",
-          purpose: "Find matching YC companies",
-          dependsOn: [],
-          params: {
-            query: companyQueryFrom(query),
-            isHiring: /\bhiring\b|\bhire\b/.test(text),
-            maxItems: 50,
-          },
-        },
-        {
-          connectorId: "linkedin-profile-search",
-          purpose: "Find people at those companies",
-          dependsOn: ["yc-companies"],
-          params: {
-            searchQuery: peopleQueryFrom(query),
-            locations: locationFrom(query),
-            maxItems: 20,
-          },
-        },
-      ],
+      steps,
     };
   }
 
-  if (wantsYc || (wantsCompanies && !wantsPeople)) {
+  if (wantsCompanies && !wantsPeople) {
     return {
-      interpretation: wantsYc
-        ? `Search the YC directory for "${query}".`
-        : `Search LinkedIn companies matching "${query}".`,
+      interpretation: `Search LinkedIn companies matching "${query}".`,
       intent: "companies",
       expectedResultType: "companies",
       clarificationNeeded: "",
       steps: [
         {
-          connectorId: wantsYc ? "yc-companies" : "linkedin-company-search",
+          connectorId: "linkedin-company-search",
           purpose: "Find matching companies",
           dependsOn: [],
-          params: wantsYc
-            ? {
-                query: companyQueryFrom(query),
-                isHiring: /\bhiring\b|\bhire\b/.test(text),
-                maxItems: 50,
-              }
-            : {
-                searchQuery: companyQueryFrom(query) || query,
-                locations: locationFrom(query),
-                maxItems: 20,
-              },
+          params: {
+            searchQuery: companyQueryFrom(query) || query,
+            locations: locationFrom(query),
+            maxItems: 20,
+          },
         },
       ],
     };

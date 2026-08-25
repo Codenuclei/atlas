@@ -15,7 +15,7 @@ import { OwnedChannelField } from "@/components/owned-channel-field";
 
 export type IntakeValues = {
   query: string;
-  platforms: "both" | "youtube" | "instagram";
+  platforms: "both" | "youtube" | "instagram" | "yc";
   dateRange: "30" | "90" | "365";
   ownedHandles: string;
 };
@@ -34,9 +34,21 @@ const TEMPLATES = [
     ownedHandles: "",
   },
   {
+    label: "YC Summer 2026 fintech",
+    query: "YC Summer 2026 fintech companies",
+    platforms: "yc" as const,
+    ownedHandles: "",
+  },
+  {
+    label: "YC current batch + founders",
+    query: "YC current batch founders",
+    platforms: "yc" as const,
+    ownedHandles: "",
+  },
+  {
     label: "Compare a market",
-    query: "Research YC fintech companies hiring for growth roles",
-    platforms: "both" as const,
+    query: "Research YC Summer 2026 fintech companies hiring for growth roles",
+    platforms: "yc" as const,
     ownedHandles: "",
   },
 ];
@@ -89,23 +101,43 @@ function useTypewriter(phrases: string[]) {
 export function composeQuery(values: IntakeValues): string {
   const parts = [values.query.trim()];
   const scope: string[] = [];
-  if (values.platforms !== "both") {
-    scope.push(values.platforms === "youtube" ? "YouTube only" : "Instagram only");
-  }
-  if (values.dateRange !== "365") {
+  if (values.platforms === "youtube") scope.push("YouTube only");
+  else if (values.platforms === "instagram") scope.push("Instagram only");
+  else if (values.platforms === "yc") scope.push("Y Combinator companies and founders");
+  if (values.platforms !== "yc" && values.dateRange !== "365") {
     scope.push(`last ${values.dateRange} days`);
   }
-  if (values.ownedHandles.trim()) {
+  if (values.platforms !== "yc" && values.ownedHandles.trim()) {
     scope.push(`owned channels: ${values.ownedHandles.trim()}`);
   }
   if (scope.length) parts.push(`Scope: ${scope.join("; ")}.`);
   return parts.join("\n\n");
 }
 
+/** Classic YC mark — icon-sized for the platform rail. */
+function YcMark({ size = 14 }: { size?: number; weight?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      className="rounded-[2px]"
+    >
+      <rect width="16" height="16" rx="2" fill="#F26522" />
+      <path
+        d="M4.2 3.2h2.15L8 7.35 9.65 3.2H11.8L9.05 8.6V12.8H6.95V8.6L4.2 3.2Z"
+        fill="#fff"
+      />
+    </svg>
+  );
+}
+
 const PLATFORM_OPTIONS = [
   { id: "both", label: "Both", icon: Globe },
   { id: "youtube", label: "YouTube", icon: YoutubeLogo },
   { id: "instagram", label: "Instagram", icon: InstagramLogo },
+  { id: "yc", label: "Y Combinator", icon: YcMark },
 ] as const;
 
 export function ResearchIntake({

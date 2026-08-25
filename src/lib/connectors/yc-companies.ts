@@ -13,36 +13,300 @@ export const ycCompaniesSchema = z.object({
 
 export type YcCompaniesInput = z.infer<typeof ycCompaniesSchema>;
 
-const STOP_WORDS =
-  /\b(yc|y combinator|ycombinator|companies|company|startups?|startup|hiring|hire|hired|looking|find|show|list|get|the|and|for|with|that|who|went|through|from|into|in|on|at|of|to|a|an)\b/gi;
+/** Apify actor with founders + LinkedIn (fullDetails / extractFounders). */
+export const YC_ACTOR_ID = "apivault_labs/yc-companies-scraper";
 
+const STOP_WORDS =
+  /\b(yc|y combinator|ycombinator|companies|company|startups?|startup|hiring|hire|hired|looking|find|show|list|get|the|and|for|with|that|who|went|through|from|into|in|on|at|of|to|a|an|current|latest|batch|batches|winter|summer|spring|fall|founders?|linkedin|scope|combinator)\b/gi;
+
+/** Maps user language → Apify industry filter values. */
 const INDUSTRY_ALIASES: Array<[RegExp, string]> = [
-  [/\bfintech\b/i, "Fintech"],
-  [/\bhealth ?care\b|\bbiotech\b/i, "Healthcare"],
-  [/\bconsumer\b/i, "Consumer"],
-  [/\beducation\b|\bedtech\b/i, "Education"],
-  [/\bclimate\b/i, "Industrials"],
-  [/\bb2b\b/i, "B2B"],
+  [/\bfintech\b|\bfinance\b|\bpayments?\b/i, "Fintech"],
+  [/\bhealth ?care\b|\bbiotech\b|\bhealthtech\b/i, "Healthcare"],
+  [/\bconsumer\b|\bd2c\b|\bb2c\b/i, "Consumer"],
+  [/\bb2b\b|\bsaas\b|\benterprise\b/i, "B2B"],
+  [/\bclimate\b|\bindustrial/i, "Industrials"],
+  [/\breal.?estate\b|\bproptech\b/i, "Real Estate and Construction"],
+  [/\bgovernment\b|\bgovtech\b/i, "Government"],
 ];
 
-export function prepareYcActorInput(input: YcCompaniesInput) {
-  const raw = input.query ?? "";
-  const keywords = raw.replace(STOP_WORDS, " ").replace(/\s+/g, " ").trim();
-  const inferredIndustry =
-    input.industry ||
-    INDUSTRY_ALIASES.find(([pattern]) => pattern.test(`${raw} ${keywords}`))?.[1];
-  const hiring =
+/** Maps user language → Apify tag filters (orthogonal to industry). */
+const TAG_ALIASES: Array<[RegExp, string]> = [
+  [/\bai\b|\bartificial intelligence\b|\bmachine learning\b|\bml\b/i, "AI"],
+  [/\bdeveloper tools?\b|\bdevtools?\b|\binfra(?:structure)?\b/i, "Developer Tools"],
+  [/\bmarketplace\b/i, "Marketplace"],
+  [/\bcrypto\b|\bweb3\b|\bblockchain\b/i, "Crypto"],
+];
+
+const BATCH_LONG = /\b(winter|summer|spring|fall)\s+(20\d{2})\b/i;
+const BATCH_SHORT = /\b([wsf]|sp)(\d{2})\b/i;
+
+export function currentYcBatch(now = new Date()): string {
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  if (month >= 8) return `Fall ${year}`;
+  if (month >= 5) return `Summer ${year}`;
+  if (month >= 3) return `Spring ${year}`;
+  return `Winter ${year}`;
+}
+
+export function parseYcBatch(text: string, now = new Date()): string | undefined {
+  if (/\b(current|latest)\s+batch\b|\bcurrent\s+yc\b|\blatest\s+yc\b/i.test(text)) {
+    return currentYcBatch(now);
+  }
+  const long = text.match(BATCH_LONG);
+  if (long) {
+    const season = long[1][0].toUpperCase() + long[1].slice(1).toLowerCase();
+    return `${season} ${long[2]}`;
+  }
+  const short = text.match(BATCH_SHORT);
+  if (short) {
+    const code = short[1].toLowerCase();
+    const yy = short[2];
+    const year = Number(yy) >= 70 ? `19${yy}` : `20${yy}`;
+    const season =
+      code === "w"
+        ? "Winter"
+        : code === "s"
+          ? "Summer"
+          : code === "f"
+            ? "Fall"
+            : "Spring";
+    return `${season} ${year}`;
+  }
+  return undefined;
+}
+
+export function parseYcIndustry(text: string): string | undefined {
+  return INDUSTRY_ALIASES.find(([pattern]) => pattern.test(text))?.[1];
+}
+
+export function parseYcTags(text: string): string[] {
+  return TAG_ALIASES.filter(([pattern]) => pattern.test(text)).map(([, tag]) => tag);
+}
+
+/**
+ * Topical keywords only. Batch / industry / hiring / YC boilerplate are stripped
+ * so the Apify free-text field stays a real search term — or empty when filters
+ * already express the request.
+ */
+export function ycKeywordsFrom(text: string): string {
+  return text
+    .replace(/\bscope\s*:\s*[^\n]*/gi, " ")
+    .replace(/\b(yc|y combinator|ycombinator)\b/gi, " ")
+    .replace(/\b(winter|summer|spring|fall)\s+20\d{2}\b/gi, " ")
+    .replace(/\b([wsf]|sp)\d{2}\b/gi, " ")
+    .replace(/\b(current|latest)\s+batch\b/gi, " ")
+    .replace(/\b20\d{2}\b/g, " ")
+    .replace(STOP_WORDS, " ")
+    .replace(/[^\w+#.\- ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Fill missing structured YC filters from the user request. Prefer batch /
+ * industry / tags over dumping the raw sentence into `query` (which made the
+ * actor return thin, off-batch hits).
+ */
+export function enrichYcCompaniesInput(
+  input: YcCompaniesInput,
+  contextQuery = "",
+): YcCompaniesInput {
+  const context = [input.query, contextQuery].filter(Boolean).join("\n");
+  const batch = input.batch?.trim() || parseYcBatch(context);
+  const industry = input.industry?.trim() || parseYcIndustry(context);
+  const isHiring =
     input.isHiring ??
-    /\b(hiring|hire|hired|jobs?|roles?|openings?)\b/i.test(raw);
-  const maxItems = clampMaxItems(input.maxItems, 50);
+    /\b(hiring|hire|hired|jobs?|roles?|openings?)\b/i.test(context);
+
+  const rawQuery = input.query?.trim() || "";
+  const looksLikeSentence =
+    !rawQuery ||
+    rawQuery.length > 48 ||
+    /\b(yc|y combinator|scope:|companies|founders|batch)\b/i.test(rawQuery) ||
+    /\b(winter|summer|spring|fall)\s+20\d{2}\b/i.test(rawQuery);
+
+  let query = looksLikeSentence
+    ? ycKeywordsFrom(context)
+    : ycKeywordsFrom(rawQuery);
+
+  // Industry label duplicated in query is redundant — filters are stronger.
+  if (industry && query.toLowerCase() === industry.toLowerCase()) {
+    query = "";
+  }
+  // With solid directory filters, empty free-text lets Apify browse by filter
+  // (fullDetails still pulls founders + long description per company).
+  if ((batch || industry) && query.length < 2) {
+    query = "";
+  }
 
   return {
-    query: keywords,
-    batches: input.batch ? [input.batch] : [],
-    industries: inferredIndustry ? [inferredIndustry] : [],
-    hiringOnly: hiring,
-    maxRecords: maxItems,
+    query: query || undefined,
+    batch: batch || undefined,
+    industry: industry || undefined,
+    isHiring,
+    maxItems: input.maxItems,
   };
+}
+
+export function prepareYcActorInput(
+  input: YcCompaniesInput,
+  contextQuery = "",
+) {
+  const enriched = enrichYcCompaniesInput(input, contextQuery);
+  const tags = parseYcTags(
+    [enriched.query, enriched.industry, contextQuery, input.query]
+      .filter(Boolean)
+      .join(" "),
+  );
+  // Drop tags that duplicate the industry filter.
+  const filteredTags = tags.filter(
+    (tag) => tag.toLowerCase() !== enriched.industry?.toLowerCase(),
+  );
+  const maxItems = clampMaxItems(enriched.maxItems, 50);
+
+  return {
+    query: enriched.query ?? "",
+    batches: enriched.batch ? [enriched.batch] : [],
+    industries: enriched.industry ? [enriched.industry] : [],
+    tags: filteredTags,
+    isHiring: Boolean(enriched.isHiring),
+    maxResults: maxItems,
+    fullDetails: true,
+    extractIndustry: true,
+    extractBatch: true,
+    extractLocation: true,
+    extractTeamSize: true,
+    extractStatus: true,
+    extractSocials: true,
+    extractTags: true,
+    extractFounders: true,
+    extractLongDescription: true,
+    extractLogo: true,
+  };
+}
+
+function companyMeta(raw: Record<string, unknown>) {
+  const batch = firstText(raw.batch, raw.batchCode);
+  const industry = firstText(
+    raw.industry,
+    raw.subindustry,
+    Array.isArray(raw.industries) ? String(raw.industries[0] ?? "") : "",
+  );
+  const oneLiner = firstText(
+    raw.oneLiner,
+    raw.one_liner,
+    raw.description,
+    raw.longDescription,
+  );
+  const parts = [batch, industry, oneLiner].filter(Boolean);
+  return { batch, industry, oneLiner, subtitle: parts.join(" · ") };
+}
+
+export function normalizeYcCompany(raw: Record<string, unknown>): ScrapedRecord {
+  const slug = firstText(raw.slug, raw.objectID);
+  const meta = companyMeta(raw);
+  return {
+    sourceType: "yc",
+    externalId:
+      firstText(raw.companyId, raw.id, raw.objectID, slug, raw.name) || "yc",
+    title: firstText(raw.name) || "YC company",
+    subtitle: meta.subtitle || meta.oneLiner || meta.industry,
+    url:
+      firstText(raw.url, raw.ycProfileUrl, raw.ycUrl) ||
+      (slug
+        ? `https://www.ycombinator.com/companies/${slug}`
+        : firstText(raw.website)),
+    location: firstText(raw.location, raw.city, raw.country, raw.all_locations),
+    imageUrl: firstText(raw.logoUrl, raw.small_logo_thumb_url, raw.logo),
+    raw,
+  };
+}
+
+type FounderRaw = {
+  name?: unknown;
+  title?: unknown;
+  bio?: unknown;
+  linkedinUrl?: unknown;
+  linkedin?: unknown;
+  twitterUrl?: unknown;
+  twitter?: unknown;
+};
+
+/** Expand YC company founders into LinkedIn-ready profile records. */
+export function expandYcFounders(company: ScrapedRecord): ScrapedRecord[] {
+  const founders = Array.isArray(company.raw.founders)
+    ? (company.raw.founders as FounderRaw[])
+    : [];
+  const meta = companyMeta(company.raw);
+  const out: ScrapedRecord[] = [];
+
+  for (const founder of founders) {
+    const name = firstText(founder.name);
+    if (!name) continue;
+    const linkedin = firstText(founder.linkedinUrl, founder.linkedin);
+    const title = firstText(founder.title) || "Founder";
+    const bio = firstText(founder.bio);
+    out.push({
+      sourceType: "profile",
+      externalId:
+        linkedin ||
+        `yc-founder:${company.externalId}:${name.toLowerCase().replace(/\s+/g, "-")}`,
+      title: name,
+      subtitle: [title, company.title, meta.batch, meta.industry]
+        .filter(Boolean)
+        .join(" · "),
+      url: linkedin,
+      location: company.location,
+      imageUrl: "",
+      raw: {
+        researchRole: "yc-founder",
+        companyName: company.title,
+        companyUrl: company.url,
+        companyBatch: meta.batch,
+        companyIndustry: meta.industry,
+        founderTitle: title,
+        bio,
+        linkedinUrl: linkedin,
+        twitterUrl: firstText(founder.twitterUrl, founder.twitter),
+        source: "yc-companies",
+      },
+    });
+  }
+  return out;
+}
+
+export function ycFounderLinkedInUrls(records: ScrapedRecord[]): string[] {
+  const urls = new Set<string>();
+  for (const record of records) {
+    if (record.sourceType === "profile" && record.url.includes("linkedin.com/in/")) {
+      urls.add(record.url);
+    }
+    if (record.sourceType !== "yc") continue;
+    const founders = Array.isArray(record.raw.founders)
+      ? (record.raw.founders as FounderRaw[])
+      : [];
+    for (const founder of founders) {
+      const linkedin = firstText(founder.linkedinUrl, founder.linkedin);
+      if (linkedin.includes("linkedin.com/in/")) urls.add(linkedin);
+    }
+  }
+  return [...urls];
+}
+
+export function ycCompanyNames(records: ScrapedRecord[]): string[] {
+  return [
+    ...new Set(
+      records
+        .filter((record) => record.sourceType === "yc" && record.title)
+        .map((record) => record.title),
+    ),
+  ];
+}
+
+export function countYcFounderLinkedIns(records: ScrapedRecord[]): number {
+  return ycFounderLinkedInUrls(records).length;
 }
 
 export const ycCompaniesConnector: Connector<YcCompaniesInput> = {
@@ -50,50 +314,35 @@ export const ycCompaniesConnector: Connector<YcCompaniesInput> = {
   label: "Y Combinator companies",
   sourceType: "yc",
   kind: "search",
-  actorId: "haketa/ycombinator-companies-scraper",
-  usdPerThousand: 0,
+  actorId: YC_ACTOR_ID,
+  usdPerThousand: 5,
   capability:
-    "Search YC companies via Apify actor haketa/ycombinator-companies-scraper. Put SHORT keywords in query (e.g. fintech, AI), never the full user sentence. Set isHiring true when they mention hiring. Set industry when they name one (Fintech, Healthcare, B2B, Consumer). Default maxItems to 50.",
+    "Search YC companies via Apify actor apivault_labs/yc-companies-scraper with fullDetails + extractFounders. ALWAYS set structured filters: batch (Winter/Summer/Spring/Fall YYYY or current→resolved season) and industry when present. Put SHORT topical keywords in query only when they add signal beyond industry (e.g. payments, underwriting) — never the full user sentence, Scope lines, years, or season words. Empty query is fine when batch/industry are set. Set isHiring true when they mention hiring. Default maxItems to 50. Founders with LinkedIn URLs come back on each company — do not add linkedin-profile-search unless the user asks for deeper LinkedIn-only research.",
   inputSchema: ycCompaniesSchema,
   buildRun(input) {
     const actorInput = prepareYcActorInput(input);
     return {
       executor: "apify",
-      actorId: "haketa/ycombinator-companies-scraper",
-      maxItems: actorInput.maxRecords,
+      actorId: YC_ACTOR_ID,
+      maxItems: actorInput.maxResults,
       input: actorInput,
     };
   },
   normalize(raw): ScrapedRecord {
-    const slug = firstText(raw.slug, raw.objectID);
-    return {
-      sourceType: "yc",
-      externalId:
-        firstText(raw.companyId, raw.id, raw.objectID, slug, raw.name) || "yc",
-      title: firstText(raw.name) || "YC company",
-      subtitle: firstText(
-        raw.oneLiner,
-        raw.one_liner,
-        raw.description,
-        raw.longDescription,
-        raw.industry,
-      ),
-      url:
-        firstText(raw.ycProfileUrl, raw.ycUrl, raw.url) ||
-        (slug
-          ? `https://www.ycombinator.com/companies/${slug}`
-          : firstText(raw.website)),
-      location: firstText(raw.location, raw.all_locations),
-      imageUrl: firstText(raw.logoUrl, raw.small_logo_thumb_url, raw.logo),
-      raw,
-    };
+    return normalizeYcCompany(raw);
   },
   costEstimate(input) {
     const actorInput = prepareYcActorInput(input);
+    const filterBits = [
+      actorInput.batches[0],
+      actorInput.industries[0],
+      actorInput.tags[0],
+      actorInput.query ? `q="${actorInput.query}"` : null,
+    ].filter(Boolean);
     return {
-      usd: 0,
-      itemCount: actorInput.maxRecords,
-      note: `YC via Apify · query "${actorInput.query || "all"}"${actorInput.hiringOnly ? " · hiring only" : ""}`,
+      usd: (actorInput.maxResults / 1000) * 5,
+      itemCount: actorInput.maxResults,
+      note: `YC via Apify · ${filterBits.join(" · ") || "all"}${actorInput.isHiring ? " · hiring only" : ""} · founders+socials`,
     };
   },
 };

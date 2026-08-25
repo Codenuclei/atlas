@@ -25,6 +25,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# Cohesivity tenant credentials
+.cohesivity
+
 # local sqlite
 *.db
 *.db-journal

@@ -5,7 +5,7 @@ import { DitherField } from "@/components/dither-loader";
 
 /**
  * Renders the synthesis text as a structured research note.
- * Headings come from markdown "##"/"###" lines or ALL-CAPS section lines;
+ * Headings come from markdown "##"/"###" lines, known section titles, or ALL-CAPS lines;
  * "- " lines become bullets; bare URLs become links.
  */
 export function Brief({
@@ -52,15 +52,26 @@ type Block =
   | { type: "paragraph"; text: string }
   | { type: "bullets"; items: string[] };
 
+const SECTION_TITLES = [
+  /^best \d+ matching youtube creatives:?$/i,
+  /^best \d+ matching instagram creatives:?$/i,
+  /^audience archetypes:?$/i,
+  /^content direction:?$/i,
+  /^what type of content could work:?$/i,
+];
+
 function isHeadingLine(line: string): string | null {
-  const md = line.match(/^#{2,4}\s+(.+)/);
-  if (md) return md[1].trim();
-  const trimmed = line.trim();
+  const trimmed = line.trim().replace(/^\*\*(.+)\*\*$/, "$1").trim();
+  const md = trimmed.match(/^#{1,4}\s+(.+)/);
+  if (md) return md[1].trim().replace(/:+$/, "");
+  if (SECTION_TITLES.some((pattern) => pattern.test(trimmed))) {
+    return trimmed.replace(/:+$/, "");
+  }
   if (
     trimmed.length > 4 &&
     trimmed.length < 90 &&
     !trimmed.endsWith(".") &&
-    /^[A-Z0-9][A-Z0-9\s\-—:&/]+$/.test(trimmed)
+    /^[A-Z0-9][A-Z0-9\s\-—:&/().]+$/.test(trimmed)
   ) {
     return trimmed;
   }

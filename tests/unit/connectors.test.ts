@@ -87,6 +87,9 @@ describe("normalizers", () => {
     expect(record.title).toBe("Stripe");
     expect(record.url).toContain("/companies/stripe");
     expect(record.sourceType).toBe("yc");
+    expect(record.subtitle).toBe(
+      "Summer 2009 · Fintech · Payments infrastructure",
+    );
   });
 
   it("normalizes YouTube performance signals", () => {

@@ -1,8 +1,13 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { ZodError } from "zod";
 import { scrapePlanSchema, type ScrapePlan } from "@/lib/ai/plan-schema";
 import { getAnthropic, hasLiveAnthropicKey, mapAnthropicError } from "@/lib/ai/client";
 import { heuristicPlan } from "@/lib/ai/heuristic-plan";
 import { buildCapabilityCatalog, getConnector } from "@/lib/connectors/registry";
+import {
+  enrichYcCompaniesInput,
+  type YcCompaniesInput,
+} from "@/lib/connectors/yc-companies";
 import { AppError } from "@/lib/errors";
 import { isTestMode, maxQueryCostUsd } from "@/lib/utils";
 import { estimatePlanCost } from "@/lib/ai/cost";
@@ -24,7 +29,9 @@ export function capabilitySystemPrompt() {
     "Never ask for raw URLs for LinkedIn or company research. Explicit YouTube channel/video URLs are allowed only in youtube-content.channelUrls. Detail connectors may only follow a compatible search step and must name that connector in dependsOn.",
     "Every dependsOn value must reference an earlier connector ID. Do not create cycles or duplicate steps.",
     "Keep LinkedIn maxItems between 10 and 25 unless the user explicitly requests fewer. Use 50 for yc-companies unless the user requests fewer. The hard maximum is 100.",
-    "For yc-companies, query must contain only short topical keywords such as fintech, AI infrastructure, or climate, never the full user sentence. Remove phrases like YC companies, find, show, hiring. Set isHiring=true when the user asks for companies that are hiring. Set industry only when it maps cleanly to the connector taxonomy.",
+    "For yc-companies, ALWAYS populate structured filters — never leave params empty. Set batch when present (Winter/Summer/Spring/Fall YYYY, W24/S25, or current/latest → current season). Set industry when it maps cleanly (Fintech, Healthcare, B2B, Consumer, Industrials, etc.). Set isHiring=true when hiring is requested. query may be empty when batch/industry already capture the ask; otherwise use only short topical keywords that add signal beyond industry (e.g. payments). Never put the full user sentence, Scope lines, years, or season words in query.",
+    "YC company research is yc-companies ONLY by default. The YC actor already returns founders with LinkedIn. Do NOT add linkedin-profile-search for YC plans unless the user explicitly asks for deeper LinkedIn research (e.g. \"linkedin\", \"deeper linkedin\", \"enrich profiles\").",
+    "When LinkedIn enrichment IS requested for YC: add linkedin-profile-search depending on yc-companies, with currentJobTitles:[\"Founder\",\"Co-Founder\",\"CEO\"], currentCompanies:[], a concise founder searchQuery, and maxItems around 20.",
     "For LinkedIn jobs, use concise job titles and locations. Remember maxItems applies to every title-location pair, so avoid combinatorial plans.",
     "For content/channel analysis, use youtube-content and/or instagram-content. Preserve explicit YouTube URLs and Instagram handles only in those approved social connector fields.",
     "When the user gives only a brand or channel name, use searchQueries/search to discover accounts dynamically. Never hardcode brands or account lists.",
@@ -43,9 +50,11 @@ export function capabilitySystemPrompt() {
     "Return only the structured output required by the schema.",
     "",
     "EXAMPLES",
-    '\"YC companies hiring in fintech\" => one yc-companies step with {query:\"fintech\", industry:\"Fintech\", isHiring:true, maxItems:50}.',
+    '\"YC companies hiring in fintech\" => one yc-companies step with {industry:\"Fintech\", isHiring:true, maxItems:50} (query optional/empty).',
+    '\"YC Summer 2026 fintech companies\" => one yc-companies step with {batch:\"Summer 2026\", industry:\"Fintech\", maxItems:50} — never empty params.',
+    '\"YC current batch founders\" => one yc-companies step with batch set to the current YC season; founders come from the actor — do not add linkedin-profile-search.',
     '\"Senior backend roles in Berlin\" => one linkedin-jobs step with {jobTitles:[\"Senior Backend Engineer\"], locations:[\"Berlin\"], maxItems:10}.',
-    '\"AI infra founders in SF who went through YC\" => yc-companies search first, then linkedin-profile-search depending on yc-companies.',
+    '\"YC AI infra founders with deeper LinkedIn enrichment\" => yc-companies first, then linkedin-profile-search depending on yc-companies.',
     '\"Analyze content for Acme across YouTube and Instagram\" => parallel owned-channel searches, followed by parallel youtube-content-examples and instagram-content-examples depending on both.',
     '\"Analyze https://youtube.com/@acme\" => one youtube-content step preserving that URL and including Shorts.',
     "",
@@ -54,8 +63,49 @@ export function capabilitySystemPrompt() {
   ].join("\n");
 }
 
+/** Derive missing YC filters from the user query so empty Claude params never ship. */
+export function enrichPlanFromQuery(plan: ScrapePlan, query: string): ScrapePlan {
+  return {
+    ...plan,
+    steps: plan.steps.map((step) => {
+      if (step.connectorId !== "yc-companies") return step;
+      return {
+        ...step,
+        params: enrichYcCompaniesInput(
+          step.params as YcCompaniesInput,
+          query,
+        ) as Record<string, unknown>,
+      };
+    }),
+  };
+}
+
 export function validatePlan(plan: ScrapePlan): ScrapePlan {
-  const parsed = scrapePlanSchema.parse(plan);
+  const coerced: ScrapePlan = {
+    ...plan,
+    interpretation: plan.interpretation?.trim() || "Research request",
+    clarificationNeeded: plan.clarificationNeeded ?? "",
+    steps: (plan.steps ?? []).map((step) => ({
+      ...step,
+      purpose: step.purpose?.trim() || step.connectorId || "Search",
+      dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn : [],
+      params: step.params ?? {},
+    })),
+  };
+  let parsed: ScrapePlan;
+  try {
+    parsed = scrapePlanSchema.parse(coerced);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new AppError(
+        "PLAN_INVALID",
+        `Plan schema invalid: ${error.issues.map((i) => i.message).join("; ")}`,
+        400,
+        error.flatten(),
+      );
+    }
+    throw error;
+  }
   const seen = new Set<string>();
   let totalItems = 0;
   for (const step of parsed.steps) {
@@ -174,7 +224,7 @@ export async function createPlanWithSource(query: string): Promise<PlannedQuery>
   }
   if (isTestMode() || !hasLiveAnthropicKey()) {
     return {
-      plan: validatePlan(heuristicPlan(trimmed)),
+      plan: enrichPlanFromQuery(validatePlan(heuristicPlan(trimmed)), trimmed),
       source: "heuristic",
       notice: isTestMode()
         ? undefined
@@ -185,16 +235,22 @@ export async function createPlanWithSource(query: string): Promise<PlannedQuery>
   try {
     const draft = await requestPlan(trimmed);
     try {
-      return { plan: validatePlan(draft), source: "claude" };
+      return {
+        plan: enrichPlanFromQuery(validatePlan(draft), trimmed),
+        source: "claude",
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid plan";
       const repaired = await requestPlan(trimmed, message);
-      return { plan: validatePlan(repaired), source: "claude" };
+      return {
+        plan: enrichPlanFromQuery(validatePlan(repaired), trimmed),
+        source: "claude",
+      };
     }
   } catch (error) {
     if (error instanceof AppError && error.code === "UNAUTHORIZED") {
       return {
-        plan: validatePlan(heuristicPlan(trimmed)),
+        plan: enrichPlanFromQuery(validatePlan(heuristicPlan(trimmed)), trimmed),
         source: "heuristic",
         notice:
           "Claude rejected the API key, so this plan was generated locally. Update ANTHROPIC_API_KEY and restart.",
@@ -205,7 +261,7 @@ export async function createPlanWithSource(query: string): Promise<PlannedQuery>
       (error.code === "PLAN_INVALID" || error.code === "PLAN_REFUSED")
     ) {
       return {
-        plan: validatePlan(heuristicPlan(trimmed)),
+        plan: enrichPlanFromQuery(validatePlan(heuristicPlan(trimmed)), trimmed),
         source: "heuristic",
         notice:
           "Claude could not produce a valid connector plan, so Atlas used the validated local planner.",

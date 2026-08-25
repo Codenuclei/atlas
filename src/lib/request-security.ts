@@ -23,28 +23,56 @@ function clientKey(request: Request) {
 
 export function assertApiAccess(request: Request) {
   const hostname = new URL(request.url).hostname;
+  // Localhost is always open (dev / local tooling).
   if (["localhost", "127.0.0.1", "::1"].includes(hostname)) return;
 
   const configuredToken = process.env.APP_ACCESS_TOKEN?.trim();
+  if (!configuredToken) {
+    throw new AppError(
+      "UNAUTHORIZED",
+      "Remote API access is disabled. Use localhost or configure APP_ACCESS_TOKEN.",
+      401,
+    );
+  }
+
+  // APP_ACCESS_TOKEN set → remote enabled (needed for *.cohesivity.app UI).
+  // If a client sends x-app-token / Bearer, it must match; same-origin
+  // browser fetches typically omit it and are still allowed.
   const suppliedToken =
     request.headers.get("x-app-token") ||
     request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (configuredToken && suppliedToken === configuredToken) return;
+  if (suppliedToken && suppliedToken !== configuredToken) {
+    throw new AppError("UNAUTHORIZED", "Invalid APP_ACCESS_TOKEN.", 401);
+  }
+}
 
-  throw new AppError(
-    "UNAUTHORIZED",
-    "Remote API access is disabled. Use localhost or configure APP_ACCESS_TOKEN.",
-    401,
-  );
+function allowedHosts(request: Request): Set<string> {
+  const hosts = new Set<string>();
+  try {
+    hosts.add(new URL(request.url).host);
+  } catch {
+    /* ignore malformed request url */
+  }
+  // Behind Cohesivity / Railway proxies, request.url is often the upstream
+  // host while the browser Origin is the public *.cohesivity.app host.
+  for (const header of ["x-forwarded-host", "host"] as const) {
+    const raw = request.headers.get(header)?.split(",")[0]?.trim();
+    if (raw) hosts.add(raw);
+  }
+  return hosts;
 }
 
 export function assertSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
   if (!origin) return;
-  const expected = new URL(request.url).origin;
-  if (origin !== expected) {
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
     throw new AppError("UNAUTHORIZED", "Cross-origin request rejected.", 403);
   }
+  if (allowedHosts(request).has(originHost)) return;
+  throw new AppError("UNAUTHORIZED", "Cross-origin request rejected.", 403);
 }
 
 export function rateLimit(

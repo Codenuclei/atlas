@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
-    "start": "next start",
+    "start": "prisma migrate deploy && next start",
+    "start:prod": "prisma migrate deploy && next start",
+    "deploy:cohesivity": "node scripts/cohesivity-deploy.mjs",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -23,6 +25,7 @@
     "clsx": "latest",
     "lucide-react": "latest",
     "next": "latest",
+    "prisma": "^6.14.0",
     "react": "latest",
     "react-dom": "latest",
     "tailwind-merge": "latest",
@@ -34,7 +37,6 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "prisma": "^6.14.0",
     "tailwindcss": "latest",
     "typescript": "latest",
     "vitest": "latest"

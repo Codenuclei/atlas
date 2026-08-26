@@ -6,9 +6,14 @@ import type { Connector } from "@/lib/connectors/types";
 export const ycCompaniesSchema = z.object({
   query: z.string().optional(),
   batch: z.string().optional(),
+  /** Multiple YC seasons (e.g. past-year window). Takes precedence over batch when set. */
+  batches: z.array(z.string()).optional(),
   industry: z.string().optional(),
+  tags: z.array(z.string()).optional(),
   isHiring: z.boolean().optional(),
   maxItems: z.number().optional(),
+  /** Set by the tool-calling YC orchestrator — startJob must not re-pollute. */
+  _orchestrated: z.boolean().optional(),
 });
 
 export type YcCompaniesInput = z.infer<typeof ycCompaniesSchema>;
@@ -23,6 +28,7 @@ const STOP_WORDS =
 const INDUSTRY_ALIASES: Array<[RegExp, string]> = [
   [/\bfintech\b|\bfinance\b|\bpayments?\b/i, "Fintech"],
   [/\bhealth ?care\b|\bbiotech\b|\bhealthtech\b/i, "Healthcare"],
+  [/\bedtech\b|\beducation\b|\bteaching\b|\bteachers?\b|\bclassroom\b|\bcurriculum\b|\blesson\s*plans?\b|\bassessments?\b|\bschools?\b|\bstudents?\b/i, "Education"],
   [/\bconsumer\b|\bd2c\b|\bb2c\b/i, "Consumer"],
   [/\bb2b\b|\bsaas\b|\benterprise\b/i, "B2B"],
   [/\bclimate\b|\bindustrial/i, "Industrials"],
@@ -32,7 +38,8 @@ const INDUSTRY_ALIASES: Array<[RegExp, string]> = [
 
 /** Maps user language → Apify tag filters (orthogonal to industry). */
 const TAG_ALIASES: Array<[RegExp, string]> = [
-  [/\bai\b|\bartificial intelligence\b|\bmachine learning\b|\bml\b/i, "AI"],
+  [/\bai\b|\bartificial intelligence\b|\bmachine learning\b|\bml\b|\bai-powered\b/i, "AI"],
+  [/\bedtech\b|\beducation\b|\bteaching\b|\blesson\b/i, "Education"],
   [/\bdeveloper tools?\b|\bdevtools?\b|\binfra(?:structure)?\b/i, "Developer Tools"],
   [/\bmarketplace\b/i, "Marketplace"],
   [/\bcrypto\b|\bweb3\b|\bblockchain\b/i, "Crypto"],
@@ -48,6 +55,42 @@ export function currentYcBatch(now = new Date()): string {
   if (month >= 5) return `Summer ${year}`;
   if (month >= 3) return `Spring ${year}`;
   return `Winter ${year}`;
+}
+
+const SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"] as const;
+
+export function recentYcBatches(count = 4, now = new Date()): string[] {
+  const current = currentYcBatch(now);
+  const [season, yearRaw] = current.split(" ");
+  let seasonIdx = SEASON_ORDER.indexOf(season as (typeof SEASON_ORDER)[number]);
+  let year = Number(yearRaw);
+  const out: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    out.push(`${SEASON_ORDER[seasonIdx]} ${year}`);
+    seasonIdx -= 1;
+    if (seasonIdx < 0) {
+      seasonIdx = SEASON_ORDER.length - 1;
+      year -= 1;
+    }
+  }
+  return out;
+}
+
+/** "past year" / "last 12 months" → recent YC seasons covering ~1 year. */
+export function parseYcRecentBatches(text: string, now = new Date()): string[] | undefined {
+  if (
+    /\b(past|last)\s+(one\s+)?year\b/i.test(text) ||
+    /\b(past|last)\s+12\s+months?\b/i.test(text) ||
+    /\bin\s+the\s+(past|last)\s+year\b/i.test(text)
+  ) {
+    // 4 seasons ≈ one YC year; include current season.
+    return recentYcBatches(4, now);
+  }
+  if (/\b(past|last)\s+(\d+)\s+years?\b/i.test(text)) {
+    const n = Number(text.match(/\b(past|last)\s+(\d+)\s+years?\b/i)?.[2] ?? "1");
+    return recentYcBatches(Math.min(Math.max(n, 1) * 4, 12), now);
+  }
+  return undefined;
 }
 
 export function parseYcBatch(text: string, now = new Date()): string | undefined {
@@ -91,17 +134,34 @@ export function parseYcTags(text: string): string[] {
  * already express the request.
  */
 export function ycKeywordsFrom(text: string): string {
-  return text
+  const cleaned = text
     .replace(/\bscope\s*:\s*[^\n]*/gi, " ")
+    // Drop product-pitch lead-ins ("X is an AI-powered…") so we keep topical nouns.
+    .replace(
+      /\b[A-Z][A-Za-z0-9.+-]{1,32}\s+is\s+an?\s+[^.!?\n]{0,160}/gi,
+      " ",
+    )
     .replace(/\b(yc|y combinator|ycombinator)\b/gi, " ")
     .replace(/\b(winter|summer|spring|fall)\s+20\d{2}\b/gi, " ")
     .replace(/\b([wsf]|sp)\d{2}\b/gi, " ")
     .replace(/\b(current|latest)\s+batch\b/gi, " ")
+    .replace(/\b(past|last)\s+(one\s+)?year\b/gi, " ")
+    .replace(/\b(past|last)\s+\d+\s+years?\b/gi, " ")
+    .replace(/\b(past|last)\s+12\s+months?\b/gi, " ")
     .replace(/\b20\d{2}\b/g, " ")
     .replace(STOP_WORDS, " ")
     .replace(/[^\w+#.\- ]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+  // Prefer a short topical phrase — long leftovers are pitch debris.
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (tokens.length <= 4) return cleaned;
+  const prefer =
+    /\b(lesson|teaching|teacher|education|edtech|assessment|curriculum|classroom|school|student|tutor|learning)\b/i;
+  const preferred = tokens.filter((token) => prefer.test(token));
+  if (preferred.length) return preferred.slice(0, 4).join(" ");
+  return tokens.slice(0, 3).join(" ");
 }
 
 /**
@@ -114,7 +174,12 @@ export function enrichYcCompaniesInput(
   contextQuery = "",
 ): YcCompaniesInput {
   const context = [input.query, contextQuery].filter(Boolean).join("\n");
-  const batch = input.batch?.trim() || parseYcBatch(context);
+  const recentBatches =
+    (input.batches && input.batches.length > 0
+      ? input.batches
+      : undefined) || parseYcRecentBatches(context);
+  const batch =
+    recentBatches?.[0] || input.batch?.trim() || parseYcBatch(context);
   const industry = input.industry?.trim() || parseYcIndustry(context);
   const isHiring =
     input.isHiring ??
@@ -124,30 +189,40 @@ export function enrichYcCompaniesInput(
   const looksLikeSentence =
     !rawQuery ||
     rawQuery.length > 48 ||
-    /\b(yc|y combinator|scope:|companies|founders|batch)\b/i.test(rawQuery) ||
-    /\b(winter|summer|spring|fall)\s+20\d{2}\b/i.test(rawQuery);
+    /\b(yc|y combinator|scope:|companies|founders|batch|similar|teaching|companion)\b/i.test(
+      rawQuery,
+    ) ||
+    /\b(winter|summer|spring|fall)\s+20\d{2}\b/i.test(rawQuery) ||
+    /\bis\s+an?\s+/i.test(rawQuery);
 
   let query = looksLikeSentence
-    ? ycKeywordsFrom(context)
+    ? ycKeywordsFrom(context || rawQuery)
     : ycKeywordsFrom(rawQuery);
 
   // Industry label duplicated in query is redundant — filters are stronger.
   if (industry && query.toLowerCase() === industry.toLowerCase()) {
     query = "";
   }
-  // Drop leftover sentence debris ("research growth roles") once batch/industry
-  // already express the ask — free-text only helps for short topical keywords.
-  if ((batch || industry) && (query.split(/\s+/).filter(Boolean).length > 2 || query.length < 2)) {
+  // Drop leftover sentence debris once batch/industry already express the ask.
+  if (
+    (batch || industry || (recentBatches && recentBatches.length > 0)) &&
+    (query.split(/\s+/).filter(Boolean).length > 3 || query.length < 2)
+  ) {
     query = "";
   }
   if ((batch || industry) && query.length < 2) {
     query = "";
   }
 
+  const tags = input.tags?.length
+    ? input.tags
+    : parseYcTags(context);
   return {
     query: query || undefined,
-    batch: batch || undefined,
+    batch: recentBatches?.length ? undefined : batch || undefined,
+    batches: recentBatches?.length ? recentBatches : undefined,
     industry: industry || undefined,
+    tags: tags.length ? [...new Set(tags)] : undefined,
     isHiring,
     maxItems: input.maxItems,
   };
@@ -163,9 +238,9 @@ export function enrichYcCompaniesInput(
 export function ycCompaniesInputFromJobInput(
   input: Record<string, unknown>,
 ): YcCompaniesInput & { _broadenAttempt?: number; _notice?: string } {
-  const batchFromActor = Array.isArray(input.batches)
-    ? String(input.batches[0] ?? "").trim()
-    : "";
+  const batchesFromActor = Array.isArray(input.batches)
+    ? input.batches.map(String).map((value) => value.trim()).filter(Boolean)
+    : [];
   const industryFromActor = Array.isArray(input.industries)
     ? String(input.industries[0] ?? "").trim()
     : "";
@@ -175,16 +250,31 @@ export function ycCompaniesInputFromJobInput(
       : typeof input.maxItems === "number"
         ? input.maxItems
         : undefined;
+  const connectorBatches =
+    Array.isArray(input.batches) &&
+    !("fullDetails" in input || "maxResults" in input || "extractFounders" in input)
+      ? input.batches.map(String).filter(Boolean)
+      : [];
+  const batches =
+    connectorBatches.length > 0
+      ? connectorBatches
+      : batchesFromActor.length > 0
+        ? batchesFromActor
+        : undefined;
   return {
     query: typeof input.query === "string" ? input.query : undefined,
     batch:
       (typeof input.batch === "string" && input.batch.trim()) ||
-      batchFromActor ||
+      (batches && batches.length === 1 ? batches[0] : undefined) ||
       undefined,
+    batches: batches && batches.length ? batches : undefined,
     industry:
       (typeof input.industry === "string" && input.industry.trim()) ||
       industryFromActor ||
       undefined,
+    tags: Array.isArray(input.tags)
+      ? input.tags.map(String).filter(Boolean)
+      : undefined,
     isHiring: typeof input.isHiring === "boolean" ? input.isHiring : undefined,
     maxItems: maxFromActor,
     _broadenAttempt:
@@ -204,6 +294,13 @@ export function broadenYcCompaniesInput(
         "No companies matched the free-text filter, so the search was broadened to directory filters only.",
     };
   }
+  if (input.tags && input.tags.length) {
+    return {
+      input: { ...input, tags: undefined },
+      notice:
+        "No companies matched those tags, so the tag filters were removed while keeping industry/batch.",
+    };
+  }
   if (input.isHiring) {
     return {
       input: { ...input, isHiring: false },
@@ -211,49 +308,53 @@ export function broadenYcCompaniesInput(
         "No companies were marked hiring for those filters, so the hiring-only constraint was removed.",
     };
   }
-  if (input.batch && input.industry) {
+  if ((input.batch || (input.batches && input.batches.length)) && input.industry) {
+    const label = input.batch || input.batches?.join(", ");
     return {
-      input: { ...input, batch: undefined },
-      notice: `No companies matched batch ${input.batch}; showing ${input.industry} companies across YC batches instead.`,
+      input: { ...input, batch: undefined, batches: undefined },
+      notice: `No companies matched batch ${label}; showing ${input.industry} companies across YC batches instead.`,
     };
   }
-  if (input.batch) {
+  if (input.batch || (input.batches && input.batches.length)) {
+    const label = input.batch || input.batches?.join(", ");
+    // Keep a residual topical query so we never scrape the entire YC directory.
     return {
-      input: { ...input, batch: undefined },
-      notice: `No companies matched batch ${input.batch}; showing matching YC companies across batches instead.`,
+      input: {
+        ...input,
+        batch: undefined,
+        batches: undefined,
+        query: input.query || "startup",
+      },
+      notice: `No companies matched batch ${label}; widened beyond that season window.`,
     };
   }
-  if (input.industry) {
-    return {
-      input: { ...input, industry: undefined },
-      notice: `No companies matched industry ${input.industry}; showing a broader YC company set instead.`,
-    };
-  }
+  // Never drop the last industry filter — empty filters scrape the whole directory.
   return null;
 }
 
-export function prepareYcActorInput(
-  input: YcCompaniesInput,
-  contextQuery = "",
-) {
-  const enriched = enrichYcCompaniesInput(input, contextQuery);
-  const tags = parseYcTags(
-    [enriched.query, enriched.industry, contextQuery, input.query]
-      .filter(Boolean)
-      .join(" "),
+/**
+ * Convert orchestrator/AI filters into the Apify actor payload.
+ * Does NOT re-derive filters from free text — the tool orchestrator owns that.
+ */
+export function prepareYcActorInput(input: YcCompaniesInput) {
+  const batches =
+    input.batches && input.batches.length > 0
+      ? input.batches
+      : input.batch
+        ? [input.batch]
+        : [];
+  const filteredTags = (input.tags ?? []).filter(
+    (tag) => tag.toLowerCase() !== input.industry?.toLowerCase(),
   );
-  // Drop tags that duplicate the industry filter.
-  const filteredTags = tags.filter(
-    (tag) => tag.toLowerCase() !== enriched.industry?.toLowerCase(),
-  );
-  const maxItems = clampMaxItems(enriched.maxItems, 50);
+  const maxItems = clampMaxItems(input.maxItems, 50);
+  const query = (input.query ?? "").trim();
 
   return {
-    query: enriched.query ?? "",
-    batches: enriched.batch ? [enriched.batch] : [],
-    industries: enriched.industry ? [enriched.industry] : [],
+    query: query.split(/\s+/).filter(Boolean).length > 4 ? "" : query,
+    batches,
+    industries: input.industry ? [input.industry] : [],
     tags: filteredTags,
-    isHiring: Boolean(enriched.isHiring),
+    isHiring: Boolean(input.isHiring),
     maxResults: maxItems,
     fullDetails: true,
     extractIndustry: true,

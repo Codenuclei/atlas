@@ -8,6 +8,7 @@ import {
   enrichYcCompaniesInput,
   type YcCompaniesInput,
 } from "@/lib/connectors/yc-companies";
+import { refineYcPlanWithOrchestrator } from "@/lib/ai/yc-search-orchestrator";
 import { AppError } from "@/lib/errors";
 import { isTestMode, maxQueryCostUsd } from "@/lib/utils";
 import { estimatePlanCost } from "@/lib/ai/cost";
@@ -63,7 +64,7 @@ export function capabilitySystemPrompt() {
   ].join("\n");
 }
 
-/** Derive missing YC filters from the user query so empty Claude params never ship. */
+/** Heuristic YC filter fill — used in tests / when Claude is unavailable. */
 export function enrichPlanFromQuery(plan: ScrapePlan, query: string): ScrapePlan {
   return {
     ...plan,
@@ -78,6 +79,18 @@ export function enrichPlanFromQuery(plan: ScrapePlan, query: string): ScrapePlan
       };
     }),
   };
+}
+
+/** AI tool-calling orchestrator refines yc-companies params for correctness. */
+export async function orchestratePlanYcFilters(
+  plan: ScrapePlan,
+  query: string,
+): Promise<ScrapePlan> {
+  if (!plan.steps.some((step) => step.connectorId === "yc-companies")) {
+    return plan;
+  }
+  const refined = await refineYcPlanWithOrchestrator(plan, query);
+  return validatePlan(refined as ScrapePlan);
 }
 
 export function validatePlan(plan: ScrapePlan): ScrapePlan {
@@ -222,49 +235,53 @@ export async function createPlanWithSource(query: string): Promise<PlannedQuery>
   if (!trimmed) {
     throw new AppError("BAD_REQUEST", "Query text is required.", 400);
   }
-  if (isTestMode() || !hasLiveAnthropicKey()) {
+  if (isTestMode()) {
     return {
       plan: enrichPlanFromQuery(validatePlan(heuristicPlan(trimmed)), trimmed),
       source: "heuristic",
-      notice: isTestMode()
-        ? undefined
-        : "Claude is not configured, so this plan was generated locally. Add a valid ANTHROPIC_API_KEY to .env to use Claude.",
     };
+  }
+  if (!hasLiveAnthropicKey()) {
+    throw new AppError(
+      "UNAUTHORIZED",
+      "ANTHROPIC_API_KEY is required. Heuristic planning is disabled outside test mode.",
+      401,
+    );
   }
 
   try {
     const draft = await requestPlan(trimmed);
     try {
+      // Do not heuristically rewrite YC params — the tool orchestrator owns them.
+      const validated = validatePlan(draft);
       return {
-        plan: enrichPlanFromQuery(validatePlan(draft), trimmed),
+        plan: await orchestratePlanYcFilters(validated, trimmed),
         source: "claude",
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid plan";
       const repaired = await requestPlan(trimmed, message);
+      const validated = validatePlan(repaired);
       return {
-        plan: enrichPlanFromQuery(validatePlan(repaired), trimmed),
+        plan: await orchestratePlanYcFilters(validated, trimmed),
         source: "claude",
       };
     }
   } catch (error) {
     if (error instanceof AppError && error.code === "UNAUTHORIZED") {
-      return {
-        plan: enrichPlanFromQuery(validatePlan(heuristicPlan(trimmed)), trimmed),
-        source: "heuristic",
-        notice:
-          "Claude rejected the API key, so this plan was generated locally. Update ANTHROPIC_API_KEY and restart.",
-      };
+      throw error;
     }
     if (
       error instanceof AppError &&
       (error.code === "PLAN_INVALID" || error.code === "PLAN_REFUSED")
     ) {
+      // Connector selection may fall back locally, but YC filters still require AI tools.
+      const local = validatePlan(heuristicPlan(trimmed));
       return {
-        plan: enrichPlanFromQuery(validatePlan(heuristicPlan(trimmed)), trimmed),
-        source: "heuristic",
+        plan: await orchestratePlanYcFilters(local, trimmed),
+        source: "claude",
         notice:
-          "Claude could not produce a valid connector plan, so Atlas used the validated local planner.",
+          "Claude could not produce a valid connector plan shape, so Atlas used a local scaffold and AI tool-calling for YC filters.",
       };
     }
     throw error;

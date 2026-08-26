@@ -2,16 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   YC_ACTOR_ID,
   currentYcBatch,
-  enrichYcCompaniesInput,
-  expandYcFounders,
   normalizeYcCompany,
+  expandYcFounders,
   parseYcBatch,
   parseYcIndustry,
+  parseYcRecentBatches,
   prepareYcActorInput,
   ycCompaniesConnector,
   ycKeywordsFrom,
 } from "@/lib/connectors/yc-companies";
-import { enrichPlanFromQuery } from "@/lib/ai/planner";
 import ycFixture from "../fixtures/yc-company.json";
 
 describe("YC actor id", () => {
@@ -24,47 +23,38 @@ describe("YC actor id", () => {
 });
 
 describe("prepareYcActorInput", () => {
-  it("sets fullDetails and extractFounders and maps filters", () => {
+  it("maps AI-orchestrated filters into the Apify payload", () => {
     const input = prepareYcActorInput({
-      query: "fintech startups",
-      batch: "Summer 2026",
-      industry: "Fintech",
-      isHiring: true,
-      maxItems: 25,
+      query: "",
+      batches: ["Summer 2026", "Spring 2026"],
+      industry: "Education",
+      tags: ["AI", "Education"],
+      isHiring: false,
+      maxItems: 50,
+      _orchestrated: true,
     });
     expect(input.fullDetails).toBe(true);
     expect(input.extractFounders).toBe(true);
-    expect(input.batches).toEqual(["Summer 2026"]);
-    expect(input.industries).toEqual(["Fintech"]);
-    expect(input.isHiring).toBe(true);
-    expect(input.maxResults).toBe(25);
+    expect(input.batches).toEqual(["Summer 2026", "Spring 2026"]);
+    expect(input.industries).toEqual(["Education"]);
+    expect(input.tags).toEqual(["AI"]);
+    expect(input.query).toBe("");
+    expect(input.maxResults).toBe(50);
   });
 
-  it("derives batch+industry from user text instead of dumping raw query", () => {
-    const actor = prepareYcActorInput(
-      {},
-      "YC Summer 2026 fintech companies\n\nScope: Y Combinator companies and founders.",
-    );
-    expect(actor.batches).toEqual(["Summer 2026"]);
-    expect(actor.industries).toEqual(["Fintech"]);
+  it("clears sentence-length free-text instead of sending pitches to Apify", () => {
+    const actor = prepareYcActorInput({
+      query: "SAVRA is an AI teaching companion for lesson plans",
+      industry: "Education",
+      batches: ["Fall 2025"],
+    });
     expect(actor.query).toBe("");
-    expect(actor.query).not.toMatch(/Scope|YC|2026/i);
+    expect(actor.industries).toEqual(["Education"]);
+    expect(actor.batches).toEqual(["Fall 2025"]);
   });
 });
 
-describe("enrichYcCompaniesInput / ycKeywordsFrom", () => {
-  it("fills empty Claude params from the user request", () => {
-    const enriched = enrichYcCompaniesInput(
-      {},
-      "YC Summer 2026 fintech companies",
-    );
-    expect(enriched).toMatchObject({
-      batch: "Summer 2026",
-      industry: "Fintech",
-    });
-    expect(enriched.query).toBeFalsy();
-  });
-
+describe("ycKeywordsFrom / parse helpers used by AI tools", () => {
   it("strips Scope lines and season words from keywords", () => {
     expect(
       ycKeywordsFrom(
@@ -72,31 +62,19 @@ describe("enrichYcCompaniesInput / ycKeywordsFrom", () => {
       ),
     ).toBe("fintech");
   });
-});
 
-describe("enrichPlanFromQuery", () => {
-  it("repairs empty yc-companies params before run", () => {
-    const plan = enrichPlanFromQuery(
-      {
-        interpretation: "Find YC fintech",
-        intent: "companies",
-        expectedResultType: "companies",
-        clarificationNeeded: "",
-        steps: [
-          {
-            connectorId: "yc-companies",
-            purpose: "Find companies",
-            dependsOn: [],
-            params: {},
-          },
-        ],
-      },
-      "YC Summer 2026 fintech companies",
+  it("resolves past-year windows into recent seasons", () => {
+    const batches = parseYcRecentBatches(
+      "companies from the past one year",
+      new Date("2026-08-26T12:00:00Z"),
     );
-    expect(plan.steps[0].params).toMatchObject({
-      batch: "Summer 2026",
-      industry: "Fintech",
-    });
+    // August maps to Summer in currentYcBatch (Fall starts in September).
+    expect(batches).toEqual([
+      "Summer 2026",
+      "Spring 2026",
+      "Winter 2026",
+      "Fall 2025",
+    ]);
   });
 });
 
@@ -146,7 +124,10 @@ describe("parseYcBatch / parseYcIndustry / currentYcBatch", () => {
     expect(parseYcBatch("YC current batch founders", july)).toBe("Summer 2026");
   });
 
-  it("maps fintech industry aliases", () => {
+  it("maps fintech and education industry aliases", () => {
     expect(parseYcIndustry("YC Summer 2026 fintech")).toBe("Fintech");
+    expect(parseYcIndustry("AI teaching lesson plans for teachers")).toBe(
+      "Education",
+    );
   });
 });

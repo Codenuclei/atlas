@@ -10,11 +10,11 @@ import { extractLinkedInUrls, mergeKeyFor, mergeRecords } from "@/lib/resolve";
 import {
   expandYcFounders,
   enrichYcCompaniesInput,
-  broadenYcCompaniesInput,
   ycCompaniesInputFromJobInput,
   ycCompanyNames,
   type YcCompaniesInput,
 } from "@/lib/connectors/yc-companies";
+import { orchestrateYcSearch } from "@/lib/ai/yc-search-orchestrator";
 import type { ScrapePlan } from "@/lib/ai/plan-schema";
 import { sanitizeForSqliteJson, type ScrapedRecord } from "@/lib/normalize";
 import {
@@ -37,6 +37,7 @@ import {
   deriveInstagramExampleHashtags,
   isOwnedBrandCreative,
 } from "@/lib/content-research";
+import { isTestMode } from "@/lib/utils";
 
 function parseParams(connectorId: string, params: unknown) {
   return getConnector(connectorId).inputSchema.parse(params);
@@ -44,14 +45,31 @@ function parseParams(connectorId: string, params: unknown) {
 
 export async function createQueryFromPlan(text: string, planInput: ScrapePlan) {
   const plan = validatePlan(planInput);
-  // Never trust empty Claude yc-companies params — derive batch/industry/keywords
-  // from the user request so we don't fall back to dumping raw text into Apify.
+  // YC params must come from the AI tool orchestrator — never heuristic enrich
+  // outside SCRAPER_TEST_MODE / vitest.
   for (const step of plan.steps) {
     if (step.connectorId !== "yc-companies") continue;
-    step.params = enrichYcCompaniesInput(
-      step.params as YcCompaniesInput,
+    if (step.params && (step.params as { _orchestrated?: boolean })._orchestrated) {
+      continue;
+    }
+    if (isTestMode()) {
+      step.params = {
+        ...enrichYcCompaniesInput(step.params as YcCompaniesInput, text),
+        _orchestrated: true,
+      } as Record<string, unknown>;
+      continue;
+    }
+    const orchestrated = await orchestrateYcSearch(
       text,
-    ) as Record<string, unknown>;
+      step.params as YcCompaniesInput,
+    );
+    step.params = orchestrated.params as Record<string, unknown>;
+    if (
+      orchestrated.rationale &&
+      !plan.interpretation.includes(orchestrated.rationale)
+    ) {
+      plan.interpretation = `${plan.interpretation}\n\nYC filters: ${orchestrated.rationale}`;
+    }
   }
   const estimate = estimatePlanCost(plan);
   const query = await db.query.create({
@@ -174,10 +192,36 @@ async function startJob(jobId: string): Promise<boolean> {
     stepDependsOn,
   );
     if (connector.id === "yc-companies") {
-      params = enrichYcCompaniesInput(
-        params as YcCompaniesInput,
-        job.query.text,
-      ) as Record<string, unknown>;
+      const raw = params as Record<string, unknown>;
+      const meta = ycCompaniesInputFromJobInput(raw);
+      // Broadened retries and already-orchestrated plans must not be re-polluted
+      // from the raw user pitch.
+      if (meta._broadenAttempt || raw._orchestrated) {
+        params = {
+          query: meta.query,
+          batch: meta.batch,
+          batches: meta.batches,
+          industry: meta.industry,
+          tags: meta.tags,
+          isHiring: meta.isHiring,
+          maxItems: meta.maxItems,
+          _orchestrated: true,
+          ...(meta._broadenAttempt
+            ? { _broadenAttempt: meta._broadenAttempt, _notice: meta._notice }
+            : {}),
+        };
+      } else if (isTestMode()) {
+        params = {
+          ...enrichYcCompaniesInput(meta, job.query.text),
+          _orchestrated: true,
+        } as Record<string, unknown>;
+      } else {
+        const orchestrated = await orchestrateYcSearch(
+          job.query.text,
+          meta,
+        );
+        params = orchestrated.params as Record<string, unknown>;
+      }
     }
     if (connector.id === "youtube-content-examples") {
       const examples = { ...(params as Record<string, unknown>) };
@@ -476,17 +520,37 @@ async function ingestDataset(jobId: string) {
       );
       const attempt = Number(current._broadenAttempt ?? 0);
       if (attempt < 3) {
-        const broadened = broadenYcCompaniesInput({
-          query: current.query,
-          batch: current.batch,
-          industry: current.industry,
-          isHiring: current.isHiring,
-          maxItems: current.maxItems,
-        });
-        if (broadened) {
-          const nextInterpretation = job.query.interpretation.includes(broadened.notice)
+        try {
+          const broadened = await orchestrateYcSearch(
+            job.query.text,
+            {
+              query: current.query,
+              batch: current.batch,
+              batches: current.batches,
+              industry: current.industry,
+              tags: current.tags,
+              isHiring: current.isHiring,
+              maxItems: current.maxItems,
+            },
+            {
+              mode: "broaden",
+              previousFilters: {
+                query: current.query,
+                batch: current.batch,
+                batches: current.batches,
+                industry: current.industry,
+                tags: current.tags,
+                isHiring: current.isHiring,
+                maxItems: current.maxItems,
+              },
+            },
+          );
+          const notice =
+            broadened.rationale ||
+            "Previous YC filters returned no companies; AI broadened the search.";
+          const nextInterpretation = job.query.interpretation.includes(notice)
             ? job.query.interpretation
-            : `${job.query.interpretation}\n\n${broadened.notice}`;
+            : `${job.query.interpretation}\n\n${notice}`;
           await db.query.update({
             where: { id: job.queryId },
             data: {
@@ -504,13 +568,17 @@ async function ingestDataset(jobId: string) {
               finishedAt: null,
               error: null,
               input: {
-                ...broadened.input,
+                ...broadened.params,
+                _orchestrated: true,
                 _broadenAttempt: attempt + 1,
-                _notice: broadened.notice,
+                _notice: notice,
               } as Prisma.InputJsonValue,
             },
           });
           return;
+        } catch (error) {
+          // Keep the empty succeeded run rather than failing the whole query.
+          console.error("YC AI broaden failed", error);
         }
       }
     }

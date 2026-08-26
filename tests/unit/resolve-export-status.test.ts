@@ -88,15 +88,21 @@ describe("YC Apify connector", () => {
     });
   });
 
-  it("strips the user sentence down to keywords and infers hiring + industry", async () => {
+  it("sends AI-orchestrated structured filters without pitch text", async () => {
     const { getConnector } = await import("@/lib/connectors/registry");
     const run = getConnector("yc-companies").buildRun({
-      query: "YC companies hiring in fintech",
+      query: "",
+      industry: "Fintech",
+      isHiring: true,
+      batches: ["Winter 2024"],
+      maxItems: 50,
+      _orchestrated: true,
     });
     expect(run.input).toMatchObject({
-      query: "fintech",
+      query: "",
       isHiring: true,
       industries: ["Fintech"],
+      batches: ["Winter 2024"],
       maxResults: 50,
       extractFounders: true,
     });

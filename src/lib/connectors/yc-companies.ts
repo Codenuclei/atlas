@@ -24,7 +24,31 @@ export const YC_ACTOR_ID = "apivault_labs/yc-companies-scraper";
 const STOP_WORDS =
   /\b(yc|y combinator|ycombinator|companies|company|startups?|startup|hiring|hire|hired|looking|find|show|list|get|the|and|for|with|that|who|went|through|from|into|in|on|at|of|to|a|an|current|latest|batch|batches|winter|summer|spring|fall|founders?|linkedin|scope|combinator|research|researched|analyze|analys(?:is|e|ing)|compare|comparing|market|markets|growth|roles?|exact|matching|return|creatives?|please|help|me|us|our|their)\b/gi;
 
-/** Maps user language → Apify industry filter values. */
+/** Allowed YC directory industry values (Apify vocabulary — not search heuristics). */
+export const YC_DIRECTORY_INDUSTRIES = [
+  "Fintech",
+  "Healthcare",
+  "Education",
+  "Consumer",
+  "B2B",
+  "Industrials",
+  "Real Estate and Construction",
+  "Government",
+] as const;
+
+/** Allowed YC directory tag values (Apify vocabulary — not search heuristics). */
+export const YC_DIRECTORY_TAGS = [
+  "AI",
+  "Education",
+  "Developer Tools",
+  "Marketplace",
+  "Crypto",
+] as const;
+
+/**
+ * Test/heuristic-only aliases. Live YC filters are chosen by the AI tool
+ * orchestrator — do not use these to decide production search params.
+ */
 const INDUSTRY_ALIASES: Array<[RegExp, string]> = [
   [/\bfintech\b|\bfinance\b|\bpayments?\b/i, "Fintech"],
   [/\bhealth ?care\b|\bbiotech\b|\bhealthtech\b/i, "Healthcare"],
@@ -36,7 +60,6 @@ const INDUSTRY_ALIASES: Array<[RegExp, string]> = [
   [/\bgovernment\b|\bgovtech\b/i, "Government"],
 ];
 
-/** Maps user language → Apify tag filters (orthogonal to industry). */
 const TAG_ALIASES: Array<[RegExp, string]> = [
   [/\bai\b|\bartificial intelligence\b|\bmachine learning\b|\bml\b|\bai-powered\b/i, "AI"],
   [/\bedtech\b|\beducation\b|\bteaching\b|\blesson\b/i, "Education"],
@@ -60,8 +83,8 @@ export function currentYcBatch(now = new Date()): string {
 const SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"] as const;
 
 /** Pure calendar helper — AI tools call this with a count the model chooses. */
-export function recentYcBatches(count = 4, now = new Date()): string[] {
-  const safeCount = Math.min(Math.max(Math.floor(count) || 4, 1), 16);
+export function recentYcBatches(count: number, now = new Date()): string[] {
+  const safeCount = Math.min(Math.max(Math.floor(count) || 1, 1), 16);
   const current = currentYcBatch(now);
   const [season, yearRaw] = current.split(" ");
   let seasonIdx = SEASON_ORDER.indexOf(season as (typeof SEASON_ORDER)[number]);
@@ -82,6 +105,15 @@ export function recentYcBatches(count = 4, now = new Date()): string[] {
 export function ycBatchesForYear(year: number): string[] {
   const y = String(year);
   return [`Winter ${y}`, `Spring ${y}`, `Summer ${y}`, `Fall ${y}`];
+}
+
+/**
+ * Seasons covering roughly the last N months (4 YC seasons ≈ 12 months).
+ * AI passes the time window; this only does calendar math.
+ */
+export function ycBatchesForMonths(months: number, now = new Date()): string[] {
+  const safeMonths = Math.min(Math.max(Math.floor(months) || 1, 1), 48);
+  return recentYcBatches(Math.ceil(safeMonths / 3), now);
 }
 
 export function parseYcBatch(text: string, now = new Date()): string | undefined {
@@ -145,14 +177,10 @@ export function ycKeywordsFrom(text: string): string {
     .replace(/\s+/g, " ")
     .trim();
 
-  // Prefer a short topical phrase — long leftovers are pitch debris.
+  // Keep a short topical phrase — long leftovers are pitch debris.
   const tokens = cleaned.split(/\s+/).filter(Boolean);
   if (tokens.length <= 4) return cleaned;
-  const prefer =
-    /\b(lesson|teaching|teacher|education|edtech|assessment|curriculum|classroom|school|student|tutor|learning)\b/i;
-  const preferred = tokens.filter((token) => prefer.test(token));
-  if (preferred.length) return preferred.slice(0, 4).join(" ");
-  return tokens.slice(0, 3).join(" ");
+  return tokens.slice(0, 4).join(" ");
 }
 
 /**
@@ -178,7 +206,7 @@ export function enrichYcCompaniesInput(
   const looksLikeSentence =
     !rawQuery ||
     rawQuery.length > 48 ||
-    /\b(yc|y combinator|scope:|companies|founders|batch|similar|teaching|companion)\b/i.test(
+    /\b(yc|y combinator|scope:|companies|founders|batch|similar)\b/i.test(
       rawQuery,
     ) ||
     /\b(winter|summer|spring|fall)\s+20\d{2}\b/i.test(rawQuery) ||
@@ -489,7 +517,7 @@ export const ycCompaniesConnector: Connector<YcCompaniesInput> = {
   actorId: YC_ACTOR_ID,
   usdPerThousand: 5,
   capability:
-    "Search YC companies via Apify actor apivault_labs/yc-companies-scraper with fullDetails + extractFounders. ALWAYS set structured filters: batch (Winter/Summer/Spring/Fall YYYY or current→resolved season) and industry when present. Put SHORT topical keywords in query only when they add signal beyond industry (e.g. payments, underwriting) — never the full user sentence, Scope lines, years, or season words. Empty query is fine when batch/industry are set. Set isHiring true when they mention hiring. Default maxItems to 50. Founders with LinkedIn URLs come back on each company — do not add linkedin-profile-search unless the user asks for deeper LinkedIn-only research.",
+    "Search YC companies via Apify actor apivault_labs/yc-companies-scraper with fullDetails + extractFounders. Draft params lightly (maxItems ~50, isHiring if obvious). Leave batch window, industry, tags, and short query for the YC tool orchestrator — do not invent season lists or industry/tag mappings here. Never put the full user sentence or Scope lines in query. Founders with LinkedIn URLs come back on each company — do not add linkedin-profile-search unless the user asks for deeper LinkedIn-only research.",
   inputSchema: ycCompaniesSchema,
   buildRun(input) {
     const actorInput = prepareYcActorInput(input);

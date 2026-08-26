@@ -8,6 +8,7 @@ import {
   parseYcIndustry,
   prepareYcActorInput,
   recentYcBatches,
+  ycBatchesForMonths,
   ycBatchesForYear,
   ycCompaniesConnector,
   ycKeywordsFrom,
@@ -82,6 +83,17 @@ describe("ycKeywordsFrom / season helpers used by AI tools", () => {
       "Winter 2025",
       "Spring 2025",
       "Summer 2025",
+      "Fall 2025",
+    ]);
+  });
+
+  it("maps a months lookback into seasons without hardcoding year windows", () => {
+    expect(
+      ycBatchesForMonths(12, new Date("2026-08-26T12:00:00Z")),
+    ).toEqual([
+      "Summer 2026",
+      "Spring 2026",
+      "Winter 2026",
       "Fall 2025",
     ]);
   });

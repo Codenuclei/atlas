@@ -6,10 +6,10 @@ import {
   currentYcBatch,
   parseYcBatch,
   parseYcIndustry,
-  parseYcRecentBatches,
   parseYcTags,
   prepareYcActorInput,
   recentYcBatches,
+  ycBatchesForYear,
   ycCompaniesSchema,
   ycKeywordsFrom,
   type YcCompaniesInput,
@@ -42,7 +42,7 @@ const YC_TAGS = [
 const finalizeSchema = z.object({
   query: z.string().max(80).optional().nullable(),
   batch: z.string().max(32).optional().nullable(),
-  batches: z.array(z.string().max(32)).max(12).optional().nullable(),
+  batches: z.array(z.string().max(32)).max(16).optional().nullable(),
   industry: z.string().max(64).optional().nullable(),
   tags: z.array(z.string().max(64)).max(8).optional().nullable(),
   isHiring: z.boolean().optional().nullable(),
@@ -61,7 +61,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_current_yc_batch",
     description:
-      "Return the current Y Combinator season label (e.g. Fall 2026) based on today's date.",
+      "Return today's date and the current Y Combinator season label (e.g. Summer 2026).",
     input_schema: {
       type: "object",
       properties: {},
@@ -69,16 +69,42 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
-    name: "resolve_yc_time_window",
+    name: "list_recent_yc_batches",
     description:
-      "Convert natural-language time windows into YC season labels. Use for phrases like 'past one year', 'last 12 months', 'current batch', or an explicit season like 'Summer 2025'.",
+      "Return the N most recent YC seasons ending at the current batch. YOU choose N from the user's time window (past year, 18 months, 2 years, etc.).",
     input_schema: {
       type: "object",
       properties: {
-        phrase: {
-          type: "string",
-          description: "Time-window phrase from the user request",
+        count: {
+          type: "number",
+          description: "How many seasons to include (1–16).",
         },
+      },
+      required: ["count"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_yc_batches_for_year",
+    description:
+      "Return all four YC seasons for a calendar year. Use when the user names a year like 2025.",
+    input_schema: {
+      type: "object",
+      properties: {
+        year: { type: "number", description: "Four-digit year, e.g. 2025" },
+      },
+      required: ["year"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "parse_explicit_yc_batch",
+    description:
+      "Parse an explicit season phrase like 'Summer 2025', 'W24', or 'current batch'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        phrase: { type: "string" },
       },
       required: ["phrase"],
       additionalProperties: false,
@@ -86,7 +112,8 @@ const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "list_yc_industries",
-    description: "List allowed YC directory industry filter values.",
+    description:
+      "List allowed YC directory industry values. You choose which industry fits.",
     input_schema: {
       type: "object",
       properties: {},
@@ -95,7 +122,8 @@ const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "list_yc_tags",
-    description: "List allowed YC directory tag filter values.",
+    description:
+      "List allowed YC directory tag values. You decide whether tags help or over-filter.",
     input_schema: {
       type: "object",
       properties: {},
@@ -105,7 +133,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "extract_topical_keywords",
     description:
-      "Extract a short topical keyword phrase from a long product pitch or research request. Never returns the full sentence.",
+      "Strip boilerplate from long text and return optional suggestions. You decide what to keep.",
     input_schema: {
       type: "object",
       properties: {
@@ -118,7 +146,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "preview_yc_actor_input",
     description:
-      "Preview the exact Apify actor payload for candidate YC filters. Call this before finalize to verify batches/industry/query look sane.",
+      "Preview the Apify actor payload for candidate filters before finalize.",
     input_schema: {
       type: "object",
       properties: {
@@ -136,7 +164,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "finalize_yc_search",
     description:
-      "Commit the final yc-companies search filters. Prefer structured filters (industry + batches + tags). Keep query empty or ≤4 topical words. Never include product pitches, Scope lines, or company names the user is comparing against.",
+      "Commit the final yc-companies filters YOU chose. Keep query empty or ≤4 topical words. Never put product pitches or brand names in query.",
     input_schema: {
       type: "object",
       properties: {
@@ -149,7 +177,7 @@ const TOOLS: Anthropic.Tool[] = [
         maxItems: { type: "number" },
         rationale: {
           type: "string",
-          description: "One sentence explaining the chosen filters",
+          description: "One sentence explaining your chosen filters",
         },
       },
       required: ["rationale"],
@@ -180,26 +208,35 @@ function runTool(name: string, input: unknown): unknown {
   const args = asRecord(input);
   switch (name) {
     case "get_current_yc_batch":
-      return { batch: currentYcBatch(), today: new Date().toISOString().slice(0, 10) };
-    case "resolve_yc_time_window": {
-      const phrase = String(args.phrase ?? "");
-      const recent = parseYcRecentBatches(phrase);
-      if (recent?.length) {
-        return { batches: recent, matched: "recent_window" };
-      }
-      const single = parseYcBatch(phrase);
-      if (single) {
-        return { batches: [single], matched: "single_batch" };
-      }
-      if (/\bcurrent\b|\blatest\b/i.test(phrase)) {
-        return { batches: [currentYcBatch()], matched: "current" };
-      }
       return {
-        batches: [],
-        matched: "none",
-        hint: "No season matched. Call get_current_yc_batch or pass an explicit season like 'Summer 2025'.",
-        examples: recentYcBatches(4),
+        batch: currentYcBatch(),
+        today: new Date().toISOString().slice(0, 10),
+        note: "Call list_recent_yc_batches or list_yc_batches_for_year to build a window — you choose how wide.",
       };
+    case "list_recent_yc_batches": {
+      const batches = recentYcBatches(Number(args.count));
+      return {
+        count: batches.length,
+        batches,
+        currentBatch: currentYcBatch(),
+      };
+    }
+    case "list_yc_batches_for_year": {
+      const year = Number(args.year);
+      if (!Number.isFinite(year) || year < 2005 || year > 2100) {
+        return { ok: false, errors: ["year must be a four-digit YC-era year"] };
+      }
+      return { year, batches: ycBatchesForYear(year) };
+    }
+    case "parse_explicit_yc_batch": {
+      const phrase = String(args.phrase ?? "");
+      const batch = parseYcBatch(phrase);
+      return batch
+        ? { batch, matched: true }
+        : {
+            matched: false,
+            hint: "No explicit season found. Try list_recent_yc_batches or list_yc_batches_for_year.",
+          };
     }
     case "list_yc_industries":
       return { industries: YC_INDUSTRIES };
@@ -207,15 +244,11 @@ function runTool(name: string, input: unknown): unknown {
       return { tags: YC_TAGS };
     case "extract_topical_keywords": {
       const text = String(args.text ?? "");
-      const keywords = ycKeywordsFrom(text);
-      const industry = parseYcIndustry(text);
-      const tags = parseYcTags(text);
       return {
-        keywords: keywords || null,
-        inferredIndustry: industry ?? null,
-        inferredTags: tags,
-        guidance:
-          "If industry/tags already capture the niche, prefer empty keywords. Never keep brand/product names from the pitch.",
+        keywords: ycKeywordsFrom(text) || null,
+        suggestedIndustry: parseYcIndustry(text) ?? null,
+        suggestedTags: parseYcTags(text),
+        note: "Suggestions only — decide what to keep, drop, or ignore.",
       };
     }
     case "preview_yc_actor_input": {
@@ -277,7 +310,12 @@ function runTool(name: string, input: unknown): unknown {
           errors: ["query must be empty or at most 4 topical words"],
         };
       }
-      if (!draft.batches?.length && !draft.batch && !draft.industry && !draft.query) {
+      if (
+        !draft.batches?.length &&
+        !draft.batch &&
+        !draft.industry &&
+        !draft.query
+      ) {
         return {
           ok: false,
           errors: ["set at least one of batches, industry, or a short query"],
@@ -307,28 +345,22 @@ function runTool(name: string, input: unknown): unknown {
 function systemPrompt(mode: "initial" | "broaden") {
   const shared = [
     "You are the YC search orchestrator for Atlas Research.",
-    "Your job: turn a natural-language research request into correct yc-companies directory filters.",
+    "Convert the user research request into yc-companies directory filters.",
     "",
-    "RULES",
-    "- Always use tools. Do not invent season labels — call resolve_yc_time_window or get_current_yc_batch.",
-    "- Prefer structured filters: industry + batches + tags. Keep free-text query empty when possible.",
-    "- If the user pastes a product pitch and asks for similar YC companies, map the niche to industry/tags (e.g. teaching/lesson plans → Education, AI-powered → tag AI) and do NOT put the pitch or brand name into query.",
-    "- Do not set a tag that duplicates the industry name (e.g. industry Education + tag Education).",
-    "- 'Past one year' / 'last 12 months' → resolve_yc_time_window, then put ALL returned seasons into batches.",
-    "- isHiring only when the user asks about hiring/open roles.",
-    "- maxItems defaults to 50.",
-    "- Call preview_yc_actor_input before finalize_yc_search. Fix warnings.",
-    "- Finish by calling finalize_yc_search exactly once with the final filters.",
+    "You decide industry, tags, batch-window width, hiring flag, and keywords.",
+    "Tools only provide facts (current season, season lists, allowed industries/tags, previews).",
+    "Do not invent season labels — request them via tools.",
+    "Do not put product pitches, Scope lines, or the user's brand name into query.",
+    "Prefer structured filters over free-text when they express the ask.",
+    "Call preview_yc_actor_input before finalize_yc_search, then finalize exactly once.",
   ];
   if (mode === "broaden") {
     return [
       ...shared,
       "",
-      "BROADEN MODE",
-      "The previous filter set returned ZERO companies from the YC directory.",
-      "Propose a broader but still relevant filter set.",
-      "Preferred order: drop tags → drop hiring-only → widen/remove batch window → keep industry if possible.",
-      "Never finalize with completely empty filters (that scrapes the whole directory).",
+      "BROADEN MODE: previous filters returned zero companies.",
+      "Choose a broader filter set that still matches user intent.",
+      "Do not finalize with completely empty filters.",
     ].join("\n");
   }
   return shared.join("\n");

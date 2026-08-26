@@ -59,13 +59,15 @@ export function currentYcBatch(now = new Date()): string {
 
 const SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"] as const;
 
+/** Pure calendar helper — AI tools call this with a count the model chooses. */
 export function recentYcBatches(count = 4, now = new Date()): string[] {
+  const safeCount = Math.min(Math.max(Math.floor(count) || 4, 1), 16);
   const current = currentYcBatch(now);
   const [season, yearRaw] = current.split(" ");
   let seasonIdx = SEASON_ORDER.indexOf(season as (typeof SEASON_ORDER)[number]);
   let year = Number(yearRaw);
   const out: string[] = [];
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < safeCount; i += 1) {
     out.push(`${SEASON_ORDER[seasonIdx]} ${year}`);
     seasonIdx -= 1;
     if (seasonIdx < 0) {
@@ -76,21 +78,10 @@ export function recentYcBatches(count = 4, now = new Date()): string[] {
   return out;
 }
 
-/** "past year" / "last 12 months" → recent YC seasons covering ~1 year. */
-export function parseYcRecentBatches(text: string, now = new Date()): string[] | undefined {
-  if (
-    /\b(past|last)\s+(one\s+)?year\b/i.test(text) ||
-    /\b(past|last)\s+12\s+months?\b/i.test(text) ||
-    /\bin\s+the\s+(past|last)\s+year\b/i.test(text)
-  ) {
-    // 4 seasons ≈ one YC year; include current season.
-    return recentYcBatches(4, now);
-  }
-  if (/\b(past|last)\s+(\d+)\s+years?\b/i.test(text)) {
-    const n = Number(text.match(/\b(past|last)\s+(\d+)\s+years?\b/i)?.[2] ?? "1");
-    return recentYcBatches(Math.min(Math.max(n, 1) * 4, 12), now);
-  }
-  return undefined;
+/** All four seasons for a calendar year (Winter → Fall). */
+export function ycBatchesForYear(year: number): string[] {
+  const y = String(year);
+  return [`Winter ${y}`, `Spring ${y}`, `Summer ${y}`, `Fall ${y}`];
 }
 
 export function parseYcBatch(text: string, now = new Date()): string | undefined {
@@ -175,9 +166,7 @@ export function enrichYcCompaniesInput(
 ): YcCompaniesInput {
   const context = [input.query, contextQuery].filter(Boolean).join("\n");
   const recentBatches =
-    (input.batches && input.batches.length > 0
-      ? input.batches
-      : undefined) || parseYcRecentBatches(context);
+    input.batches && input.batches.length > 0 ? input.batches : undefined;
   const batch =
     recentBatches?.[0] || input.batch?.trim() || parseYcBatch(context);
   const industry = input.industry?.trim() || parseYcIndustry(context);

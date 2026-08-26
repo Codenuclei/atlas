@@ -6,8 +6,9 @@ import {
   expandYcFounders,
   parseYcBatch,
   parseYcIndustry,
-  parseYcRecentBatches,
   prepareYcActorInput,
+  recentYcBatches,
+  ycBatchesForYear,
   ycCompaniesConnector,
   ycKeywordsFrom,
 } from "@/lib/connectors/yc-companies";
@@ -54,7 +55,7 @@ describe("prepareYcActorInput", () => {
   });
 });
 
-describe("ycKeywordsFrom / parse helpers used by AI tools", () => {
+describe("ycKeywordsFrom / season helpers used by AI tools", () => {
   it("strips Scope lines and season words from keywords", () => {
     expect(
       ycKeywordsFrom(
@@ -63,16 +64,24 @@ describe("ycKeywordsFrom / parse helpers used by AI tools", () => {
     ).toBe("fintech");
   });
 
-  it("resolves past-year windows into recent seasons", () => {
-    const batches = parseYcRecentBatches(
-      "companies from the past one year",
-      new Date("2026-08-26T12:00:00Z"),
-    );
-    // August maps to Summer in currentYcBatch (Fall starts in September).
-    expect(batches).toEqual([
+  it("lists N recent seasons when the model chooses a count", () => {
+    expect(
+      recentYcBatches(6, new Date("2026-08-26T12:00:00Z")),
+    ).toEqual([
       "Summer 2026",
       "Spring 2026",
       "Winter 2026",
+      "Fall 2025",
+      "Summer 2025",
+      "Spring 2025",
+    ]);
+  });
+
+  it("lists all seasons for a calendar year when the model asks", () => {
+    expect(ycBatchesForYear(2025)).toEqual([
+      "Winter 2025",
+      "Spring 2025",
+      "Summer 2025",
       "Fall 2025",
     ]);
   });

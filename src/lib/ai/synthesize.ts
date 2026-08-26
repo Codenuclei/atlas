@@ -286,7 +286,11 @@ export async function scoreResults(
   context: SynthesisContext = {},
 ): Promise<Synthesis> {
   if (records.length === 0) {
-    return { scores: [], summary: "No results matched this query." };
+    return {
+    scores: [],
+    summary:
+      "No companies or profiles matched these filters. Try a broader batch (or current batch), drop the hiring-only constraint, or search by industry alone — for example \"YC companies hiring in fintech\".",
+  };
   }
   if (isTestMode()) {
     logClaude("score_results.skip", {
@@ -431,6 +435,12 @@ export async function streamSummary(
   onText: (delta: string) => void,
   context: SynthesisContext = {},
 ): Promise<string> {
+  if (records.length === 0) {
+    const text =
+      "No companies or profiles matched these filters. Try a broader batch (or current batch), drop the hiring-only constraint, or search by industry alone — for example \"YC companies hiring in fintech\".";
+    onText(text);
+    return text;
+  }
   if (isTestMode()) {
     logClaude("stream_summary.skip", {
       queryId: context.queryId,

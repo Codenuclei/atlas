@@ -10,6 +10,8 @@ import { extractLinkedInUrls, mergeKeyFor, mergeRecords } from "@/lib/resolve";
 import {
   expandYcFounders,
   enrichYcCompaniesInput,
+  broadenYcCompaniesInput,
+  ycCompaniesInputFromJobInput,
   ycCompanyNames,
   type YcCompaniesInput,
 } from "@/lib/connectors/yc-companies";
@@ -467,6 +469,51 @@ async function ingestDataset(jobId: string) {
     if (page.items.length === 0) break;
   } while (offset < total);
   if (connector.id === "yc-companies") {
+    const companyCount = records.filter((record) => record.sourceType === "yc").length;
+    if (companyCount === 0) {
+      const current = ycCompaniesInputFromJobInput(
+        (job.input ?? {}) as Record<string, unknown>,
+      );
+      const attempt = Number(current._broadenAttempt ?? 0);
+      if (attempt < 3) {
+        const broadened = broadenYcCompaniesInput({
+          query: current.query,
+          batch: current.batch,
+          industry: current.industry,
+          isHiring: current.isHiring,
+          maxItems: current.maxItems,
+        });
+        if (broadened) {
+          const nextInterpretation = job.query.interpretation.includes(broadened.notice)
+            ? job.query.interpretation
+            : `${job.query.interpretation}\n\n${broadened.notice}`;
+          await db.query.update({
+            where: { id: job.queryId },
+            data: {
+              interpretation: nextInterpretation,
+              status: "running",
+            },
+          });
+          await db.job.update({
+            where: { id: job.id },
+            data: {
+              status: "queued",
+              apifyRunId: null,
+              apifyDatasetId: null,
+              itemCount: 0,
+              finishedAt: null,
+              error: null,
+              input: {
+                ...broadened.input,
+                _broadenAttempt: attempt + 1,
+                _notice: broadened.notice,
+              } as Prisma.InputJsonValue,
+            },
+          });
+          return;
+        }
+      }
+    }
     const founders = records.flatMap((record) => expandYcFounders(record));
     records.push(...founders);
   }

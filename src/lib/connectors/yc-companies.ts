@@ -17,7 +17,7 @@ export type YcCompaniesInput = z.infer<typeof ycCompaniesSchema>;
 export const YC_ACTOR_ID = "apivault_labs/yc-companies-scraper";
 
 const STOP_WORDS =
-  /\b(yc|y combinator|ycombinator|companies|company|startups?|startup|hiring|hire|hired|looking|find|show|list|get|the|and|for|with|that|who|went|through|from|into|in|on|at|of|to|a|an|current|latest|batch|batches|winter|summer|spring|fall|founders?|linkedin|scope|combinator)\b/gi;
+  /\b(yc|y combinator|ycombinator|companies|company|startups?|startup|hiring|hire|hired|looking|find|show|list|get|the|and|for|with|that|who|went|through|from|into|in|on|at|of|to|a|an|current|latest|batch|batches|winter|summer|spring|fall|founders?|linkedin|scope|combinator|research|researched|analyze|analys(?:is|e|ing)|compare|comparing|market|markets|growth|roles?|exact|matching|return|creatives?|please|help|me|us|our|their)\b/gi;
 
 /** Maps user language → Apify industry filter values. */
 const INDUSTRY_ALIASES: Array<[RegExp, string]> = [
@@ -135,8 +135,11 @@ export function enrichYcCompaniesInput(
   if (industry && query.toLowerCase() === industry.toLowerCase()) {
     query = "";
   }
-  // With solid directory filters, empty free-text lets Apify browse by filter
-  // (fullDetails still pulls founders + long description per company).
+  // Drop leftover sentence debris ("research growth roles") once batch/industry
+  // already express the ask — free-text only helps for short topical keywords.
+  if ((batch || industry) && (query.split(/\s+/).filter(Boolean).length > 2 || query.length < 2)) {
+    query = "";
+  }
   if ((batch || industry) && query.length < 2) {
     query = "";
   }
@@ -148,6 +151,85 @@ export function enrichYcCompaniesInput(
     isHiring,
     maxItems: input.maxItems,
   };
+}
+
+/**
+ * Loosen YC filters when Apify returns zero companies so users still get a
+ * useful directory hit instead of an empty succeeded run.
+ * Order: clear free-text → drop hiring-only → drop batch (keep industry).
+ */
+
+/** Read connector-shaped or actor-shaped job.input into YcCompaniesInput. */
+export function ycCompaniesInputFromJobInput(
+  input: Record<string, unknown>,
+): YcCompaniesInput & { _broadenAttempt?: number; _notice?: string } {
+  const batchFromActor = Array.isArray(input.batches)
+    ? String(input.batches[0] ?? "").trim()
+    : "";
+  const industryFromActor = Array.isArray(input.industries)
+    ? String(input.industries[0] ?? "").trim()
+    : "";
+  const maxFromActor =
+    typeof input.maxResults === "number"
+      ? input.maxResults
+      : typeof input.maxItems === "number"
+        ? input.maxItems
+        : undefined;
+  return {
+    query: typeof input.query === "string" ? input.query : undefined,
+    batch:
+      (typeof input.batch === "string" && input.batch.trim()) ||
+      batchFromActor ||
+      undefined,
+    industry:
+      (typeof input.industry === "string" && input.industry.trim()) ||
+      industryFromActor ||
+      undefined,
+    isHiring: typeof input.isHiring === "boolean" ? input.isHiring : undefined,
+    maxItems: maxFromActor,
+    _broadenAttempt:
+      typeof input._broadenAttempt === "number" ? input._broadenAttempt : undefined,
+    _notice: typeof input._notice === "string" ? input._notice : undefined,
+  };
+}
+
+export function broadenYcCompaniesInput(
+  input: YcCompaniesInput,
+): { input: YcCompaniesInput; notice: string } | null {
+  const query = input.query?.trim();
+  if (query) {
+    return {
+      input: { ...input, query: undefined },
+      notice:
+        "No companies matched the free-text filter, so the search was broadened to directory filters only.",
+    };
+  }
+  if (input.isHiring) {
+    return {
+      input: { ...input, isHiring: false },
+      notice:
+        "No companies were marked hiring for those filters, so the hiring-only constraint was removed.",
+    };
+  }
+  if (input.batch && input.industry) {
+    return {
+      input: { ...input, batch: undefined },
+      notice: `No companies matched batch ${input.batch}; showing ${input.industry} companies across YC batches instead.`,
+    };
+  }
+  if (input.batch) {
+    return {
+      input: { ...input, batch: undefined },
+      notice: `No companies matched batch ${input.batch}; showing matching YC companies across batches instead.`,
+    };
+  }
+  if (input.industry) {
+    return {
+      input: { ...input, industry: undefined },
+      notice: `No companies matched industry ${input.industry}; showing a broader YC company set instead.`,
+    };
+  }
+  return null;
 }
 
 export function prepareYcActorInput(

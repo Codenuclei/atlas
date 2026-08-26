@@ -34,8 +34,8 @@ const TEMPLATES = [
     ownedHandles: "",
   },
   {
-    label: "YC Summer 2026 fintech",
-    query: "YC Summer 2026 fintech companies",
+    label: "YC fintech companies",
+    query: "YC companies in fintech",
     platforms: "yc" as const,
     ownedHandles: "",
   },
@@ -47,7 +47,7 @@ const TEMPLATES = [
   },
   {
     label: "Compare a market",
-    query: "Research YC Summer 2026 fintech companies hiring for growth roles",
+    query: "YC companies hiring in fintech",
     platforms: "yc" as const,
     ownedHandles: "",
   },

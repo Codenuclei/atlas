@@ -329,7 +329,7 @@ export default function QueryPage() {
             </span>
           </div>
           <h1 className="display text-[26px] leading-[1.2] font-medium">{query.text}</h1>
-          <p className="mt-1.5 text-[13px] leading-5 text-muted">
+          <p className="mt-1.5 whitespace-pre-line text-[13px] leading-5 text-muted">
             {query.interpretation}
           </p>
         </div>
@@ -509,7 +509,11 @@ export default function QueryPage() {
         records.length === 0 ? (
           <EmptyState
             title="No records yet"
-            body="Rows appear as connector steps finish. Nothing is hidden — failed steps are shown in the run summary above."
+            body={
+              isTerminalQueryStatus(query.status)
+                ? "This run finished without matches. Broaden the batch, drop hiring-only filters, or try a simpler YC industry search."
+                : "Rows appear as connector steps finish. Failed steps stay visible in the run summary above."
+            }
           />
         ) : (
           <EvidenceTable items={boardItems} queryId={query.id} />

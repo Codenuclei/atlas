@@ -53,17 +53,18 @@ export function isActiveJobStatus(status: string): boolean {
 
 export function deriveQueryStatus(jobStatuses: string[]): QueryStatus {
   if (jobStatuses.length === 0) return "queued";
-  if (jobStatuses.some((status) => status === "running" || status === "queued")) {
+  if (
+    jobStatuses.some((status) =>
+      ["queued", "running", "aborting", "timing_out"].includes(status),
+    )
+  ) {
     return "running";
   }
-  if (jobStatuses.some((status) => status === "aborting")) return "running";
   if (jobStatuses.every((status) => status === "succeeded")) return "succeeded";
-  if (jobStatuses.every((status) => status === "aborted")) return "aborted";
-  if (jobStatuses.every((status) => status === "timed_out" || status === "aborted")) {
-    return "timed_out";
-  }
+  if (jobStatuses.some((status) => status === "aborted")) return "aborted";
+  if (jobStatuses.every((status) => status === "timed_out")) return "timed_out";
   if (jobStatuses.some((status) => status === "failed" || status === "timed_out")) {
     return "failed";
   }
-  return "running";
+  return "failed";
 }

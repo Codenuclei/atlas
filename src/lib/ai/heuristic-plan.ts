@@ -92,30 +92,6 @@ export function heuristicPlan(query: string): ScrapePlan {
     };
   }
 
-  if (wantsJobs) {
-    const titleMatch = query.match(
-      /(?:senior|staff|principal|junior)?\s*(backend|frontend|fullstack|software|data|product|designer|engineer)s?/i,
-    );
-    return {
-      interpretation: `Search LinkedIn jobs matching "${query}".`,
-      intent: "jobs",
-      expectedResultType: "jobs",
-      clarificationNeeded: "",
-      steps: [
-        {
-          connectorId: "linkedin-jobs",
-          purpose: "Find matching job listings",
-          dependsOn: [],
-          params: {
-            jobTitles: [titleMatch?.[0]?.trim() || "software engineer"],
-            locations: locationFrom(query),
-            maxItems: 10,
-          },
-        },
-      ],
-    };
-  }
-
   if (wantsYc) {
     const batch = parseYcBatch(query);
     const industry = parseYcIndustry(query);
@@ -170,6 +146,30 @@ export function heuristicPlan(query: string): ScrapePlan {
       expectedResultType: addLinkedin || wantsPeople ? "mixed" : "companies",
       clarificationNeeded: "",
       steps,
+    };
+  }
+
+  if (wantsJobs) {
+    const titleMatch = query.match(
+      /(?:senior|staff|principal|junior)?\s*(backend|frontend|fullstack|software|data|product|designer|engineer)s?/i,
+    );
+    return {
+      interpretation: `Search LinkedIn jobs matching "${query}".`,
+      intent: "jobs",
+      expectedResultType: "jobs",
+      clarificationNeeded: "",
+      steps: [
+        {
+          connectorId: "linkedin-jobs",
+          purpose: "Find matching job listings",
+          dependsOn: [],
+          params: {
+            jobTitles: [titleMatch?.[0]?.trim() || "software engineer"],
+            locations: locationFrom(query),
+            maxItems: 10,
+          },
+        },
+      ],
     };
   }
 

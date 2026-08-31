@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   YC_ACTOR_ID,
+  broadenYcCompaniesInput,
   currentYcBatch,
   normalizeYcCompany,
   expandYcFounders,
@@ -127,6 +128,36 @@ describe("expandYcFounders", () => {
     });
     expect(founders[0].raw.researchRole).toBe("yc-founder");
     expect(founders[0].raw.linkedinUrl).toContain("linkedin.com/in/");
+  });
+});
+
+describe("broadenYcCompaniesInput", () => {
+  it("swaps Education industry to the Education tag before dropping batches", () => {
+    const result = broadenYcCompaniesInput({
+      industry: "Education",
+      batches: ["Winter 2025", "Spring 2025", "Summer 2025", "Fall 2025"],
+      isHiring: false,
+      maxItems: 50,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.input.industry).toBeUndefined();
+    expect(result?.input.tags).toEqual(["Education"]);
+    expect(result?.input.batches).toEqual([
+      "Winter 2025",
+      "Spring 2025",
+      "Summer 2025",
+      "Fall 2025",
+    ]);
+  });
+
+  it("drops batches while keeping industry when no tag swap applies", () => {
+    const result = broadenYcCompaniesInput({
+      industry: "Fintech",
+      batches: ["Winter 2025"],
+      maxItems: 50,
+    });
+    expect(result?.input.batches).toBeUndefined();
+    expect(result?.input.industry).toBe("Fintech");
   });
 });
 

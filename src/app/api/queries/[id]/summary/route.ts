@@ -3,7 +3,7 @@ import { LIST_HASH_KEY, detailHashKey, touchDataHash } from "@/lib/data-hash";
 import { streamSummary } from "@/lib/ai/synthesize";
 import { logClaude } from "@/lib/ai/claude-log";
 import { resultRowsToRecords } from "@/lib/export";
-import { isTerminalQueryStatus } from "@/lib/status";
+import { isTerminalQueryStatus, reconcileQueryStatus } from "@/lib/status";
 import { AppError, errorToResponse } from "@/lib/errors";
 import { guardMutation } from "@/lib/request-security";
 
@@ -22,10 +22,14 @@ export async function POST(
       new URL(request.url).searchParams.get("regenerate") === "1";
     const query = await db.query.findUnique({
       where: { id },
-      include: { results: true },
+      include: { results: true, jobs: true },
     });
     if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
-    if (!isTerminalQueryStatus(query.status)) {
+    const status = reconcileQueryStatus(
+      query.status,
+      query.jobs.map((job) => job.status),
+    );
+    if (!isTerminalQueryStatus(status)) {
       throw new AppError(
         "BAD_REQUEST",
         "A brief can only be generated after the run finishes.",

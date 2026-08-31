@@ -35,14 +35,20 @@ const ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "APP_ACCESS_TOKEN",
   "DATABASE_URL",
+  "DATABASE_PROVIDER",
+  "COH_APPLICATION_KEY",
   "SCRAPER_TEST_MODE",
   "NODE_ENV",
+  "MAX_ITEMS_CAP",
+  "MAX_QUERY_COST_USD",
 ];
 
 const DEFAULT_ENV = {
   DATABASE_URL: "file:./prod.db",
+  DATABASE_PROVIDER: "cohesivity",
   SCRAPER_TEST_MODE: "0",
   NODE_ENV: "production",
+  MAX_QUERY_COST_USD: "0",
 };
 
 function loadDotEnv(path) {
@@ -70,6 +76,9 @@ function parseCohesivity(raw) {
   const managementKey =
     raw.match(/coh_management_key[=:\s]+(coh_man_[a-z0-9]+)/i)?.[1] ||
     raw.match(/(coh_man_[a-z0-9]+)/i)?.[1];
+  const applicationKey =
+    raw.match(/coh_application_key[=:\s]+(coh_app_[a-z0-9]+)/i)?.[1] ||
+    raw.match(/(coh_app_[a-z0-9]+)/i)?.[1];
   const tenantId =
     raw.match(/tenant_id[=:\s]+([a-z0-9-]+)/i)?.[1] ||
     raw.match(/tenant[=:\s]+([a-z0-9-]+)/i)?.[1];
@@ -78,7 +87,7 @@ function parseCohesivity(raw) {
       "Could not find coh_management_key in .cohesivity. Run: npx @cohesivity/init",
     );
   }
-  return { managementKey, tenantId };
+  return { managementKey, applicationKey, tenantId };
 }
 
 function shouldSkip(relPath) {
@@ -106,7 +115,10 @@ function collectFiles(dir, files = []) {
 }
 
 async function api(method, path, { managementKey, body, formData } = {}) {
-  const headers = { Authorization: `Bearer ${managementKey}` };
+  const headers = {
+    Authorization: `Bearer ${managementKey}`,
+    "User-Agent": "AtlasAgent/1.0 (Cursor)",
+  };
   let payload;
   if (formData) {
     payload = formData;
@@ -140,7 +152,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { managementKey, tenantId } = parseCohesivity(
+  const { managementKey, applicationKey, tenantId } = parseCohesivity(
     readFileSync(COHESIVITY_FILE, "utf8"),
   );
   console.log(
@@ -151,6 +163,9 @@ async function main() {
     ...loadDotEnv(join(ROOT, ".env")),
     ...loadDotEnv(join(ROOT, ".env.local")),
   };
+  if (applicationKey && !fileEnv.COH_APPLICATION_KEY && !process.env.COH_APPLICATION_KEY) {
+    fileEnv.COH_APPLICATION_KEY = applicationKey;
+  }
 
   console.log("Provisioning railway-hosting (idempotent)...");
   const provision = await api("POST", "/api/resources/railway-hosting", {
@@ -166,8 +181,16 @@ async function main() {
 
   console.log("Setting Railway env vars...");
   for (const key of ENV_KEYS) {
-    const value =
+    let value =
       process.env[key] ?? fileEnv[key] ?? DEFAULT_ENV[key] ?? undefined;
+    // Local sqlite file: URLs are not suitable as-is; use ephemeral prod.db on Railway.
+    if (
+      key === "DATABASE_URL" &&
+      typeof value === "string" &&
+      value.startsWith("file:")
+    ) {
+      value = DEFAULT_ENV.DATABASE_URL;
+    }
     if (value === undefined || value === "") {
       if (key === "DATABASE_URL" || key === "SCRAPER_TEST_MODE" || key === "NODE_ENV") {
         // defaults covered above

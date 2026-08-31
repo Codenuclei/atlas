@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
-    "start": "prisma migrate deploy && next start",
-    "start:prod": "prisma migrate deploy && next start",
+    "start": "node scripts/start.mjs",
+    "start:prod": "node scripts/start.mjs",
+    "db:cohesivity": "node scripts/ensure-cohesivity-schema.mjs",
     "deploy:cohesivity": "node scripts/cohesivity-deploy.mjs",
     "lint": "eslint",
     "test": "vitest run",

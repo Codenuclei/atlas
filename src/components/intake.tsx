@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
-  CalendarBlank,
   Globe,
   InstagramLogo,
   Sparkle,
@@ -16,7 +15,6 @@ import { OwnedChannelField } from "@/components/owned-channel-field";
 export type IntakeValues = {
   query: string;
   platforms: "both" | "youtube" | "instagram" | "yc";
-  dateRange: "30" | "90" | "365";
   ownedHandles: string;
 };
 
@@ -97,20 +95,17 @@ function useTypewriter(phrases: string[]) {
   return text;
 }
 
-/** Compose the planner input from structured intake values. */
+/**
+ * Planner input is the user's typed research ask only.
+ * Do not auto-inject Scope / date / platform lines — those overrode NL time
+ * windows (e.g. default "90 days" beating "last year").
+ * Owned handles are included only when the user typed them.
+ */
 export function composeQuery(values: IntakeValues): string {
-  const parts = [values.query.trim()];
-  const scope: string[] = [];
-  if (values.platforms === "youtube") scope.push("YouTube only");
-  else if (values.platforms === "instagram") scope.push("Instagram only");
-  else if (values.platforms === "yc") scope.push("Y Combinator companies and founders");
-  if (values.platforms !== "yc" && values.dateRange !== "365") {
-    scope.push(`last ${values.dateRange} days`);
+  const parts = [values.query.trim()].filter(Boolean);
+  if (values.ownedHandles.trim()) {
+    parts.push(`Owned channels: ${values.ownedHandles.trim()}.`);
   }
-  if (values.platforms !== "yc" && values.ownedHandles.trim()) {
-    scope.push(`owned channels: ${values.ownedHandles.trim()}`);
-  }
-  if (scope.length) parts.push(`Scope: ${scope.join("; ")}.`);
   return parts.join("\n\n");
 }
 
@@ -152,7 +147,6 @@ export function ResearchIntake({
   const [values, setValues] = useState<IntakeValues>({
     query: "",
     platforms: "both",
-    dateRange: "90",
     ownedHandles: "",
   });
   const [focused, setFocused] = useState(false);
@@ -232,25 +226,6 @@ export function ResearchIntake({
               </button>
             ))}
           </div>
-
-          <label className="flex h-7 items-center gap-1.5 rounded-md border border-stroke pl-2 pr-1">
-            <CalendarBlank size={13} className="shrink-0 text-faint" />
-            <select
-              value={values.dateRange}
-              aria-label="Recency"
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  dateRange: event.target.value as IntakeValues["dateRange"],
-                }))
-              }
-              className="h-full bg-transparent pr-1 text-xs text-foreground focus:outline-none"
-            >
-              <option value="30">Last 30 days</option>
-              <option value="90">Last 90 days</option>
-              <option value="365">Last year</option>
-            </select>
-          </label>
 
           <OwnedChannelField
             value={values.ownedHandles}

@@ -134,8 +134,8 @@ export default function HistoryPage() {
       ) : (
         <div className="overflow-hidden rounded-lg border border-stroke">
           {visible.map((run) => {
-            const status = displayStatus(run.status, run.jobs);
             const items = (run.jobs ?? []).reduce((sum, job) => sum + job.itemCount, 0);
+            const status = displayStatus(run.status, run.jobs, items);
             const isDuplicate = duplicateTexts.has(run.text.trim().toLowerCase());
             return (
               <button

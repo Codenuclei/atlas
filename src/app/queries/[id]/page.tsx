@@ -24,8 +24,14 @@ import { EvidenceTable } from "@/components/evidence-table";
 import { Brief } from "@/components/brief";
 import { EmptyState } from "@/components/ui";
 import { resultRowsToRecords } from "@/lib/export";
-import { isTerminalQueryStatus } from "@/lib/status";
-import { displayStatus, isContentRecord } from "@/lib/view-model";
+import { isTerminalQueryStatus, reconcileQueryStatus } from "@/lib/status";
+import {
+  defaultWorkspaceTab,
+  displayStatus,
+  isContentConnector,
+  isContentRecord,
+  type WorkspaceTab,
+} from "@/lib/view-model";
 import { useCollections } from "@/lib/collections";
 import {
   fetchWithHash,
@@ -59,7 +65,7 @@ type QueryPayload = {
   }>;
 };
 
-type Tab = "creatives" | "brief" | "evidence";
+type Tab = WorkspaceTab;
 
 export default function QueryPage() {
   const params = useParams<{ id: string }>();
@@ -84,7 +90,10 @@ export default function QueryPage() {
     // Instant paint from the local cache while the server revalidates.
     const cached = readCache<{ query?: QueryPayload }>(cacheKey);
     if (cached?.data.query) {
-      lastStatus = cached.data.query.status;
+      lastStatus = reconcileQueryStatus(
+        cached.data.query.status,
+        (cached.data.query.jobs ?? []).map((job) => job.status),
+      );
       setQuery(cached.data.query);
       if (cached.data.query.summary) setSummary(cached.data.query.summary);
     }
@@ -101,20 +110,29 @@ export default function QueryPage() {
               `/api/queries/${params.id}`,
             );
         if (cancelled) return;
-        if (result) {
-          const payload = result.data;
-          lastStatus = payload.query.status;
-          setQuery(payload.query);
-          if (payload.query.summary) setSummary(payload.query.summary);
+        const next = result?.data?.query;
+        if (next?.status) {
+          lastStatus = reconcileQueryStatus(
+            next.status,
+            (next.jobs ?? []).map((job) => job.status),
+          );
+          setQuery(next);
+          if (next.summary) setSummary(next.summary);
+          setError("");
         }
-        // On 304 / unchanged, skip state updates but keep polling live runs.
         if (lastStatus && !isTerminalQueryStatus(lastStatus)) {
-          timer = setTimeout(() => poll(false), 1500);
+          timer = setTimeout(() => poll(false), 5000);
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load query");
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : "Failed to load query";
+        const rateLimited = /429|Too Many|rate/i.test(message);
+        if (rateLimited) {
+          // Keep the last good query on screen; retry after the cap cools down.
+          timer = setTimeout(() => poll(false), 12000);
+          return;
         }
+        setError(message);
       }
     }
 
@@ -137,7 +155,7 @@ export default function QueryPage() {
   }, []);
 
   const records = useMemo(
-    () => (query ? resultRowsToRecords(query.results) : []),
+    () => (query ? resultRowsToRecords(query.results ?? []) : []),
     [query],
   );
 
@@ -146,25 +164,40 @@ export default function QueryPage() {
       query
         ? boardRecordsFrom(
             records,
-            query.results.map((row) => row.jobId),
-            query.jobs,
+            (query.results ?? []).map((row) => row.jobId),
+            query.jobs ?? [],
           )
         : [],
     [query, records],
   );
 
   const hasContent = records.some(isContentRecord);
-  const running = query ? !isTerminalQueryStatus(query.status) : false;
+  const hasContentJobs = (query?.jobs ?? []).some((job) =>
+    isContentConnector(job.connectorId),
+  );
+  const effectiveStatus = query
+    ? reconcileQueryStatus(
+        query.status,
+        (query.jobs ?? []).map((job) => job.status),
+      )
+    : "queued";
+  const running = query ? !isTerminalQueryStatus(effectiveStatus) : false;
   const canSynthesizeBrief = query
-    ? isTerminalQueryStatus(query.status) && records.length > 0
+    ? isTerminalQueryStatus(effectiveStatus) && records.length > 0
     : false;
   const failedJobs = query
-    ? query.jobs.filter(
+    ? (query.jobs ?? []).filter(
         (job) => job.status === "failed" || job.status === "timed_out",
       )
     : [];
   const resolvedTab: Tab =
-    activeTab ?? (hasContent || running ? "creatives" : "brief");
+    activeTab ??
+    defaultWorkspaceTab({
+      hasContentRecords: hasContent,
+      hasEvidence: records.length > 0,
+      hasContentJobs,
+      running,
+    });
 
   async function stopRun() {
     setActionPending("stop");
@@ -292,20 +325,37 @@ export default function QueryPage() {
     return <DitherLoader label="Loading run" className="mt-10" />;
   }
 
-  const status = displayStatus(query.status, query.jobs);
+  const status = displayStatus(
+    effectiveStatus,
+    query.jobs ?? [],
+    records.length,
+  );
   const botMood: BotMood =
-    query.status === "running"
+    effectiveStatus === "running"
       ? "working"
-      : query.status === "succeeded"
+      : effectiveStatus === "succeeded" && records.length > 0
         ? "done"
-        : query.status === "failed" || query.status === "aborted"
+        : effectiveStatus === "succeeded" && records.length === 0
           ? "error"
-          : "idle";
+          : effectiveStatus === "failed" || effectiveStatus === "aborted"
+            ? "error"
+            : "idle";
+  const showCreativesTab = hasContent || hasContentJobs;
   const tabs: Array<{ id: Tab; label: string; icon: typeof GridFour }> = [
-    { id: "creatives", label: `Creatives ${boardItems.filter((i) => isContentRecord(i.record)).length || ""}`, icon: GridFour },
+    ...(showCreativesTab
+      ? [
+          {
+            id: "creatives" as const,
+            label: `Creatives ${boardItems.filter((i) => isContentRecord(i.record)).length || ""}`,
+            icon: GridFour,
+          },
+        ]
+      : []),
     { id: "brief", label: "Brief", icon: Article },
     { id: "evidence", label: `Evidence ${records.length || ""}`, icon: Table },
   ];
+  const visibleTab: Tab =
+    resolvedTab === "creatives" && !showCreativesTab ? "evidence" : resolvedTab;
 
   return (
     <main className="space-y-6">
@@ -418,10 +468,11 @@ export default function QueryPage() {
         </div>
       </div>
 
-      {running || query.status !== "succeeded" ? (
+      {running || effectiveStatus !== "succeeded" ? (
         <RunStatus
-          jobs={query.jobs}
-          queryStatus={query.status}
+          jobs={query.jobs ?? []}
+          queryStatus={effectiveStatus}
+          resultCount={records.length}
           onStop={stopRun}
           stopPending={actionPending === "stop"}
           onRetryFailed={failedJobs.length > 0 ? retryFailed : undefined}
@@ -436,21 +487,22 @@ export default function QueryPage() {
             onClick={() => setActiveTab(tab.id)}
             className={cn(
               "flex shrink-0 items-center gap-1.5 border-b-2 px-3.5 py-2.5 text-[13px] transition-colors",
-              resolvedTab === tab.id
+              visibleTab === tab.id
                 ? "border-accent font-medium text-foreground"
                 : "border-transparent text-muted hover:text-foreground",
             )}
           >
-            <tab.icon size={14} weight={resolvedTab === tab.id ? "fill" : "regular"} />
+            <tab.icon size={14} weight={visibleTab === tab.id ? "fill" : "regular"} />
             {tab.label}
           </button>
         ))}
       </div>
 
-      {resolvedTab === "creatives" ? (
+      {visibleTab === "creatives" ? (
         <CreativesBoard
           items={boardItems}
           queryId={query.id}
+          hasOtherEvidence={records.length > 0}
           savedKeys={collections.keys}
           onToggleSave={(item) =>
             collections.toggle({
@@ -463,7 +515,7 @@ export default function QueryPage() {
         />
       ) : null}
 
-      {resolvedTab === "brief" ? (
+      {visibleTab === "brief" ? (
         <section className="space-y-4">
           <div className="flex items-center justify-between no-print">
             <p className="text-[11px] text-faint">
@@ -505,12 +557,12 @@ export default function QueryPage() {
         </section>
       ) : null}
 
-      {resolvedTab === "evidence" ? (
+      {visibleTab === "evidence" ? (
         records.length === 0 ? (
           <EmptyState
             title="No records yet"
             body={
-              isTerminalQueryStatus(query.status)
+              isTerminalQueryStatus(effectiveStatus)
                 ? "This run finished without matches. Broaden the batch, drop hiring-only filters, or try a simpler YC industry search."
                 : "Rows appear as connector steps finish. Failed steps stay visible in the run summary above."
             }

@@ -29,6 +29,7 @@ export async function GET(
         });
       }
     }
+    // Read only — full sync is POST. GET+sync was bursting the 30/min Postgres cap.
     const query = await getQuery(id);
     const hash = hashQueryDetail(query);
     await writePooledHash(poolKey, hash);
@@ -53,7 +54,21 @@ export async function POST(
     const poolKey = detailHashKey(id);
     // syncQuery bumps the pool when (and only when) it mutates something,
     // so a pool match here means this sync changed nothing.
-    await syncQuery(id);
+    try {
+      await syncQuery(id);
+    } catch (error) {
+      // Rate-limited Postgres: still return the last stored query so the UI
+      // does not show a hard 429.
+      const query = await getQuery(id).catch(() => null);
+      if (query) {
+        const hash = hashQueryDetail(query);
+        return Response.json(
+          { query, hash, degraded: true },
+          { headers: { ...noStoreHeaders(), "x-data-hash": hash } },
+        );
+      }
+      throw error;
+    }
     if (knownHash) {
       const pooled = await readPooledHash(poolKey);
       if (pooled && pooled === knownHash) {

@@ -1,6 +1,6 @@
 import { ApifyClient, ApifyApiError } from "apify-client";
 import { AppError } from "@/lib/errors";
-import { isTestMode } from "@/lib/utils";
+import { isTestMode, maxQueryCostUsd } from "@/lib/utils";
 import { getMockApify } from "@/lib/apify/mock";
 
 export type ActorRunLike = {
@@ -22,7 +22,17 @@ export type ApifyProvider = {
   startActor: (
     actorId: string,
     input: Record<string, unknown>,
-    options?: { timeout?: number; memory?: number; maxItems?: number },
+    options?: {
+      timeout?: number;
+      memory?: number;
+      /** Soft result cap for the actor input path — prefer putting maxItems in input. */
+      maxItems?: number;
+      /**
+       * Pay-per-event actors reject runs when computed charge is below ~$0.10.
+       * Pass a generous ceiling so platform cost limits never abort research.
+       */
+      maxTotalChargeUsd?: number;
+    },
   ) => Promise<ActorRunLike>;
   getRun: (runId: string) => Promise<ActorRunLike>;
   abortRun: (runId: string) => Promise<ActorRunLike>;
@@ -74,7 +84,18 @@ function createLiveApify(): ApifyProvider {
   return {
     async startActor(actorId, input, options) {
       try {
-        return (await client.actor(actorId).start(input, options)) as ActorRunLike;
+        // Never pass a tiny maxItems-derived platform charge — Apify PPE actors
+        // fail with "Maximum cost per run is less than the allowed minimum of $0.10".
+        // Limit via actor input.maxItems / maxResults instead; keep a high charge ceiling.
+        const startOptions: Record<string, unknown> = {};
+        if (options?.timeout != null) startOptions.timeout = options.timeout;
+        if (options?.memory != null) startOptions.memory = options.memory;
+        const ceiling = maxQueryCostUsd();
+        startOptions.maxTotalChargeUsd =
+          options?.maxTotalChargeUsd ??
+          (Number.isFinite(ceiling) && ceiling > 0 ? Math.max(ceiling, 1) : 50);
+        // Intentionally omit options.maxItems so Apify does not derive a sub-$0.10 charge.
+        return (await client.actor(actorId).start(input, startOptions)) as ActorRunLike;
       } catch (error) {
         mapApifyError(error);
       }

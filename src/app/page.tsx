@@ -169,8 +169,8 @@ export default function HomePage() {
         ) : (
           <div className="overflow-hidden rounded-lg border border-stroke">
             {runs.slice(0, 8).map((run) => {
-              const status = displayStatus(run.status, run.jobs);
               const items = (run.jobs ?? []).reduce((sum, job) => sum + job.itemCount, 0);
+              const status = displayStatus(run.status, run.jobs, items);
               return (
                 <button
                   key={run.id}

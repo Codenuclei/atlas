@@ -59,11 +59,13 @@ export function CreativesBoard({
   queryId,
   savedKeys,
   onToggleSave,
+  hasOtherEvidence = false,
 }: {
   items: BoardRecord[];
   queryId: string;
   savedKeys: Set<string>;
   onToggleSave: (item: BoardRecord) => void;
+  hasOtherEvidence?: boolean;
 }) {
   const [platform, setPlatform] = useState<"all" | "youtube" | "instagram">("all");
   const [role, setRole] = useState<"all" | "owned" | "external">("all");
@@ -92,8 +94,16 @@ export function CreativesBoard({
   if (content.length === 0) {
     return (
       <EmptyState
-        title="No creatives matched yet"
-        body="YouTube and Instagram creatives stream in as the matching steps finish. If the run is complete, try widening the date range or removing platform limits in a rerun."
+        title={
+          hasOtherEvidence
+            ? "No YouTube or Instagram creatives in this run"
+            : "No creatives matched yet"
+        }
+        body={
+          hasOtherEvidence
+            ? "Company, job, and profile rows are on the Evidence tab."
+            : "YouTube and Instagram creatives stream in as the matching steps finish. If the run is complete, try widening the date range or removing platform limits in a rerun."
+        }
       />
     );
   }

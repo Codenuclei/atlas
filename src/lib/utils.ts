@@ -17,8 +17,12 @@ export function maxItemsCap() {
 }
 
 export function maxQueryCostUsd() {
-  const parsed = Number(process.env.MAX_QUERY_COST_USD ?? 5);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+  const raw = process.env.MAX_QUERY_COST_USD;
+  // 0 / unlimited / empty → no dollar ceiling (cost must not block research).
+  if (raw === undefined || raw === "" || raw === "unlimited") return Number.POSITIVE_INFINITY;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return Number.POSITIVE_INFINITY;
+  return parsed;
 }
 
 export function clampMaxItems(value: unknown, fallback = 25) {

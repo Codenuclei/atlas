@@ -245,16 +245,17 @@ export function enrichYcCompaniesInput(
   };
 }
 
-/**
- * Loosen YC filters when Apify returns zero companies so users still get a
- * useful directory hit instead of an empty succeeded run.
- * Order: clear free-text → drop hiring-only → drop batch (keep industry).
- */
-
 /** Read connector-shaped or actor-shaped job.input into YcCompaniesInput. */
+export type YcJobMeta = YcCompaniesInput & {
+  _orchestrated?: boolean;
+  _broadenAttempt?: number;
+  _notice?: string;
+  _ingested?: boolean;
+};
+
 export function ycCompaniesInputFromJobInput(
   input: Record<string, unknown>,
-): YcCompaniesInput & { _broadenAttempt?: number; _notice?: string } {
+): YcJobMeta {
   const batchesFromActor = Array.isArray(input.batches)
     ? input.batches.map(String).map((value) => value.trim()).filter(Boolean)
     : [];
@@ -294,12 +295,27 @@ export function ycCompaniesInputFromJobInput(
       : undefined,
     isHiring: typeof input.isHiring === "boolean" ? input.isHiring : undefined,
     maxItems: maxFromActor,
+    _orchestrated: input._orchestrated === true,
     _broadenAttempt:
       typeof input._broadenAttempt === "number" ? input._broadenAttempt : undefined,
     _notice: typeof input._notice === "string" ? input._notice : undefined,
+    _ingested: input._ingested === true,
   };
 }
 
+function industryAsTag(industry: string | undefined): string | undefined {
+  if (!industry?.trim()) return undefined;
+  return YC_DIRECTORY_TAGS.find(
+    (tag) => tag.toLowerCase() === industry.trim().toLowerCase(),
+  );
+}
+
+/**
+ * Loosen YC filters when Apify returns zero companies so users still get a
+ * useful directory hit instead of an empty succeeded run.
+ * Order: clear free-text → drop tags → drop hiring → industry↔tag swap →
+ * drop batch (keep industry/tag).
+ */
 export function broadenYcCompaniesInput(
   input: YcCompaniesInput,
 ): { input: YcCompaniesInput; notice: string } | null {
@@ -325,11 +341,31 @@ export function broadenYcCompaniesInput(
         "No companies were marked hiring for those filters, so the hiring-only constraint was removed.",
     };
   }
+  // "Education" (and similar) are both industry and tag on YC — try the tag facet
+  // before dropping the season window, since category asks often match tags.
+  const asTag = industryAsTag(input.industry);
+  if (asTag && input.industry && !(input.tags && input.tags.length)) {
+    return {
+      input: {
+        ...input,
+        industry: undefined,
+        tags: [asTag],
+      },
+      notice: `No companies matched industry ${input.industry}; retrying with the "${asTag}" directory tag instead.`,
+    };
+  }
   if ((input.batch || (input.batches && input.batches.length)) && input.industry) {
     const label = input.batch || input.batches?.join(", ");
     return {
       input: { ...input, batch: undefined, batches: undefined },
       notice: `No companies matched batch ${label}; showing ${input.industry} companies across YC batches instead.`,
+    };
+  }
+  if ((input.batch || (input.batches && input.batches.length)) && input.tags?.length) {
+    const label = input.batch || input.batches?.join(", ");
+    return {
+      input: { ...input, batch: undefined, batches: undefined },
+      notice: `No companies matched batch ${label}; showing tag-filtered companies across YC batches instead.`,
     };
   }
   if (input.batch || (input.batches && input.batches.length)) {
@@ -345,7 +381,7 @@ export function broadenYcCompaniesInput(
       notice: `No companies matched batch ${label}; widened beyond that season window.`,
     };
   }
-  // Never drop the last industry filter — empty filters scrape the whole directory.
+  // Never drop the last industry/tag filter — empty filters scrape the whole directory.
   return null;
 }
 

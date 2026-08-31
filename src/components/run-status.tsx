@@ -33,6 +33,7 @@ function LaneStatus({ job }: { job: JobRow }) {
 export function RunStatus({
   jobs,
   queryStatus,
+  resultCount = 0,
   onStop,
   stopPending,
   onRetryFailed,
@@ -40,6 +41,7 @@ export function RunStatus({
 }: {
   jobs: JobRow[];
   queryStatus: string;
+  resultCount?: number;
   onStop: () => void;
   stopPending: boolean;
   onRetryFailed?: () => void;
@@ -49,7 +51,8 @@ export function RunStatus({
   const finished = jobs.filter((job) => isTerminalJobStatus(job.status)).length;
   const failed = jobs.filter((job) => job.status === "failed" || job.status === "timed_out");
   const succeeded = jobs.filter((job) => job.status === "succeeded");
-  const totalItems = jobs.reduce((sum, job) => sum + job.itemCount, 0);
+  const countedItems = jobs.reduce((sum, job) => sum + job.itemCount, 0);
+  const totalItems = Math.max(countedItems, resultCount);
   const running = queryStatus === "running" || queryStatus === "queued";
   const progress = jobs.length === 0 ? 0 : Math.round((finished / jobs.length) * 100);
 

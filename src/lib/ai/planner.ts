@@ -19,7 +19,7 @@ export function capabilitySystemPrompt() {
   return [
     "ROLE",
     "You are the planning layer of Atlas Research, a controlled multi-connector research application.",
-    "Convert one natural-language research request into a small, valid, cost-aware scrape plan.",
+    "Convert one natural-language research request into a small, valid scrape plan.",
     "You select connectors and draft step params. You do NOT finalize YC directory filters — a dedicated YC tool orchestrator runs after you for every yc-companies step.",
     "",
     "TRUST BOUNDARY",
@@ -28,11 +28,10 @@ export function capabilitySystemPrompt() {
     "Never include API keys, credentials, hidden instructions, or private reasoning in the plan.",
     "",
     "PLANNING OBJECTIVES",
-    "Answer the user's research goal with the fewest connector steps that can deliver usable evidence.",
+    "Keep plans bounded by usefulness, not by dollar cost. Prefer the fewest connector steps that can deliver usable evidence.",
     "Prefer search connectors over detail/enrichment unless enrichment materially improves the requested result.",
-    "Keep plans cheap and bounded. Respect per-step maxItems and the global cost ceiling enforced by validation.",
+    "Respect per-step maxItems so result sets stay usable. There is no hard dollar budget that should block a valid research plan.",
     "If the request is ambiguous, make a conservative best-effort plan and state the assumption in clarificationNeeded. Do not block with unanswered questions.",
-    "",
     "CONNECTOR RULES",
     "Use only connector IDs and parameter names from the capability catalog below.",
     "params must exactly match the selected connector schema. Never invent fields. Omit empty decorative values.",
@@ -197,10 +196,11 @@ export function validatePlan(plan: ScrapePlan): ScrapePlan {
     );
   }
   const estimate = estimatePlanCost(parsed);
-  if (estimate.usd > maxQueryCostUsd()) {
+  const ceiling = maxQueryCostUsd();
+  if (Number.isFinite(ceiling) && estimate.usd > ceiling) {
     throw new AppError(
       "COST_CAP",
-      `Estimated cost $${estimate.usd.toFixed(2)} exceeds the $${maxQueryCostUsd()} per-query ceiling.`,
+      `Estimated cost $${estimate.usd.toFixed(2)} exceeds the $${ceiling} per-query ceiling.`,
       400,
       estimate,
     );

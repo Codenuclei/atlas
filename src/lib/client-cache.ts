@@ -58,7 +58,10 @@ export async function fetchWithHash<T extends Json>(
   );
   if (response.status === 304 && cached) return null;
   const hash = response.headers.get("x-data-hash") ?? "";
-  const body = (await response.json()) as T & { hash?: string };
+  const body = (await response.json()) as T & { hash?: string; error?: string; message?: string };
+  if (!response.ok) {
+    throw new Error(body.message || body.error || `Request failed (${response.status})`);
+  }
   const effectiveHash = body.hash || hash;
   if (effectiveHash) writeCache(key, effectiveHash, body);
   return { data: body, hash: effectiveHash };
@@ -77,7 +80,15 @@ export async function postWithHash<T extends Json>(
     method: "POST",
     headers: cached ? { "x-known-hash": cached.hash } : undefined,
   });
-  const body = (await response.json()) as T & { hash?: string; unchanged?: boolean };
+  const body = (await response.json()) as T & {
+    hash?: string;
+    unchanged?: boolean;
+    error?: string;
+    message?: string;
+  };
+  if (!response.ok) {
+    throw new Error(body.message || body.error || `Request failed (${response.status})`);
+  }
   if (body.unchanged) return null;
   const effectiveHash = body.hash || "";
   if (effectiveHash) writeCache(key, effectiveHash, body);

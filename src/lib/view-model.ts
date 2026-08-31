@@ -110,6 +110,7 @@ export type DisplayStatus = { label: string; tone: StatusTone };
 export function displayStatus(
   status: string,
   jobs?: Array<{ status: string }>,
+  itemCount?: number,
 ): DisplayStatus {
   switch (status) {
     case "planning":
@@ -124,6 +125,9 @@ export function displayStatus(
       return { label: anyMatching ? "Matching" : "Scanning", tone: "active" };
     }
     case "succeeded":
+      if (itemCount === 0) {
+        return { label: "No matches", tone: "warning" };
+      }
       return { label: "Complete", tone: "success" };
     case "failed": {
       const anySucceeded = jobs?.some((job) => job.status === "succeeded");
@@ -171,4 +175,24 @@ export function platformOfConnector(connectorId: string): "youtube" | "instagram
   if (connectorId.includes("youtube")) return "youtube";
   if (connectorId.includes("instagram")) return "instagram";
   return "other";
+}
+
+export function isContentConnector(connectorId: string): boolean {
+  return platformOfConnector(connectorId) !== "other";
+}
+
+export type WorkspaceTab = "creatives" | "brief" | "evidence";
+
+/** Landing tab: creatives only when the run is actually a social-content search. */
+export function defaultWorkspaceTab(input: {
+  hasContentRecords: boolean;
+  hasEvidence: boolean;
+  hasContentJobs: boolean;
+  running: boolean;
+}): WorkspaceTab {
+  if (input.hasContentRecords) return "creatives";
+  if (input.hasEvidence) return "evidence";
+  if (input.running && input.hasContentJobs) return "creatives";
+  if (input.running) return "evidence";
+  return "brief";
 }

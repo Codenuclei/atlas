@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { dedupeRecords, mergeKeyFor, mergeRecords } from "@/lib/resolve";
 import { recordsToCsv } from "@/lib/export";
-import { mapApifyStatus, deriveQueryStatus } from "@/lib/status";
+import {
+  mapApifyStatus,
+  deriveQueryStatus,
+  reconcileQueryStatus,
+} from "@/lib/status";
+import { defaultWorkspaceTab } from "@/lib/view-model";
 import type { ScrapedRecord } from "@/lib/normalize";
 
 const ada: ScrapedRecord = {
@@ -66,6 +71,55 @@ describe("apify status mapping", () => {
     expect(deriveQueryStatus(["succeeded", "succeeded"])).toBe("succeeded");
     expect(deriveQueryStatus(["succeeded", "failed"])).toBe("failed");
     expect(deriveQueryStatus(["running", "queued"])).toBe("running");
+  });
+
+  it("promotes a stale queued query when every job already finished", () => {
+    expect(reconcileQueryStatus("queued", ["succeeded"])).toBe("succeeded");
+    expect(reconcileQueryStatus("running", ["succeeded", "failed"])).toBe(
+      "failed",
+    );
+    expect(reconcileQueryStatus("queued", ["running"])).toBe("queued");
+    expect(reconcileQueryStatus("succeeded", ["failed"])).toBe("succeeded");
+  });
+});
+
+describe("workspace landing tab", () => {
+  it("opens evidence for YC and other non-creative runs", () => {
+    expect(
+      defaultWorkspaceTab({
+        hasContentRecords: false,
+        hasEvidence: true,
+        hasContentJobs: false,
+        running: false,
+      }),
+    ).toBe("evidence");
+    expect(
+      defaultWorkspaceTab({
+        hasContentRecords: false,
+        hasEvidence: true,
+        hasContentJobs: false,
+        running: true,
+      }),
+    ).toBe("evidence");
+  });
+
+  it("opens creatives only for social-content searches", () => {
+    expect(
+      defaultWorkspaceTab({
+        hasContentRecords: true,
+        hasEvidence: true,
+        hasContentJobs: true,
+        running: false,
+      }),
+    ).toBe("creatives");
+    expect(
+      defaultWorkspaceTab({
+        hasContentRecords: false,
+        hasEvidence: false,
+        hasContentJobs: true,
+        running: true,
+      }),
+    ).toBe("creatives");
   });
 });
 

@@ -59,15 +59,15 @@ export default function CreativeDetailPage() {
   }, [params.id]);
 
   const records = useMemo(
-    () => (query ? resultRowsToRecords(query.results) : []),
+    () => (query ? resultRowsToRecords(query.results ?? []) : []),
     [query],
   );
 
   const recordId = decodeURIComponent(params.recordId);
   const index = records.findIndex((record) => record.externalId === recordId);
   const record = index >= 0 ? records[index] : null;
-  const jobId = index >= 0 ? query?.results[index]?.jobId : undefined;
-  const connectorId = query?.jobs.find((job) => job.id === jobId)?.connectorId;
+  const jobId = index >= 0 ? query?.results?.[index]?.jobId : undefined;
+  const connectorId = query?.jobs?.find((job) => job.id === jobId)?.connectorId;
   const role = roleForConnector(connectorId);
 
   const related = useMemo(() => {
@@ -85,8 +85,8 @@ export default function CreativeDetailPage() {
         const candidateIndex = records.findIndex(
           (r) => r.externalId === candidate.externalId,
         );
-        const candidateJobId = query.results[candidateIndex]?.jobId;
-        const candidateConnector = query.jobs.find((job) => job.id === candidateJobId)?.connectorId;
+        const candidateJobId = query.results?.[candidateIndex]?.jobId;
+        const candidateConnector = query.jobs?.find((job) => job.id === candidateJobId)?.connectorId;
         return { record: candidate, role: roleForConnector(candidateConnector) };
       });
   }, [record, records, query]);

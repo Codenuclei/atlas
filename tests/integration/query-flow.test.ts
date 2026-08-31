@@ -24,9 +24,9 @@ describe("query flow", () => {
   });
 
   it("runs a two-step search-then-people plan", async () => {
-    const plan = heuristicPlan("AI founders in SF who went through YC");
+    const plan = heuristicPlan("AI founders in SF who went through YC with deeper LinkedIn enrichment");
     const created = await createQueryFromPlan(
-      "AI founders in SF who went through YC",
+      "AI founders in SF who went through YC with deeper LinkedIn enrichment",
       plan,
     );
     const synced = await syncQuery(created.id);
@@ -122,9 +122,9 @@ describe("query flow", () => {
   });
 
   it("fails dependent jobs when an upstream step fails", async () => {
-    const plan = heuristicPlan("AI founders in SF who went through YC");
+    const plan = heuristicPlan("AI founders in SF who went through YC with deeper LinkedIn enrichment");
     const created = await createQueryFromPlan(
-      "AI founders in SF who went through YC",
+      "AI founders in SF who went through YC with deeper LinkedIn enrichment",
       plan,
     );
     await db.job.update({

@@ -68,3 +68,13 @@ export function deriveQueryStatus(jobStatuses: string[]): QueryStatus {
   }
   return "failed";
 }
+
+/** Prefer stored status unless jobs already finished and the query row is stale. */
+export function reconcileQueryStatus(
+  status: string,
+  jobStatuses: string[],
+): QueryStatus {
+  if (isTerminalQueryStatus(status)) return status as QueryStatus;
+  const derived = deriveQueryStatus(jobStatuses);
+  return isTerminalQueryStatus(derived) ? derived : (status as QueryStatus);
+}

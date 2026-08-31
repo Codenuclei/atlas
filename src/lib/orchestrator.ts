@@ -8,6 +8,7 @@ import { generateBrief, scoreResults } from "@/lib/ai/synthesize";
 import { logClaude, logClaudeError } from "@/lib/ai/claude-log";
 import { extractLinkedInUrls, mergeKeyFor, mergeRecords } from "@/lib/resolve";
 import {
+  broadenYcCompaniesInput,
   expandYcFounders,
   enrichYcCompaniesInput,
   ycCompaniesInputFromJobInput,
@@ -23,6 +24,7 @@ import {
   isTerminalJobStatus,
   isTerminalQueryStatus,
   mapApifyStatus,
+  reconcileQueryStatus,
 } from "@/lib/status";
 import { AppError } from "@/lib/errors";
 import {
@@ -91,7 +93,19 @@ export async function createQueryFromPlan(text: string, planInput: ScrapePlan) {
     include: { jobs: true },
   });
   await touchDataHash(LIST_HASH_KEY, detailHashKey(query.id));
-  await kickReadyJobs(query.id);
+  try {
+    await kickReadyJobs(query.id);
+  } catch (error) {
+    console.error("kickReadyJobs after create failed", error);
+  }
+  const jobs = await db.job.findMany({
+    where: { queryId: query.id },
+    orderBy: { stepIndex: "asc" },
+  });
+  await db.query.update({
+    where: { id: query.id },
+    data: { status: deriveQueryStatus(jobs.map((job) => job.status)) },
+  });
   return db.query.findUniqueOrThrow({
     where: { id: query.id },
     include: { jobs: { orderBy: { stepIndex: "asc" } }, results: true },
@@ -103,7 +117,7 @@ function stepReady(
   allJobs: Array<{ connectorId: string; status: string; stepIndex: number }>,
   plan: ScrapePlan,
 ) {
-  const step = plan.steps[job.stepIndex];
+  const step = plan.steps?.[job.stepIndex];
   if (!step) return job.stepIndex === 0;
   if (!step.dependsOn.length) return true;
   return step.dependsOn.every((dep) =>
@@ -118,7 +132,7 @@ function failedDependency(
   allJobs: Array<{ connectorId: string; status: string }>,
   plan: ScrapePlan,
 ) {
-  const step = plan.steps[job.stepIndex];
+  const step = plan.steps?.[job.stepIndex];
   return step?.dependsOn.find((dependency) =>
     allJobs.some(
       (candidate) =>
@@ -145,7 +159,9 @@ async function kickReadyJobs(queryId: string): Promise<boolean> {
       orderBy: { stepIndex: "asc" },
     });
     for (const job of jobs) {
-      if (job.status !== "queued") continue;
+      // Queued, or claimed-but-never-started (running with no Apify run).
+      const orphan = job.status === "running" && !job.apifyRunId;
+      if (job.status !== "queued" && !orphan) continue;
       if (job.apifyRunId) continue;
       const blockedBy = failedDependency(job, jobs, plan);
       if (blockedBy) {
@@ -171,32 +187,76 @@ async function kickReadyJobs(queryId: string): Promise<boolean> {
   return changed;
 }
 
+/** Pick up every queued / orphaned job and start Apify for its query. */
+export async function claimQueuedWork(limit = 20) {
+  const queued = await db.job.findMany({
+    where: { status: "queued" },
+    orderBy: { stepIndex: "asc" },
+  });
+  const orphans = await db.job.findMany({
+    where: { status: "running", apifyRunId: null },
+    orderBy: { stepIndex: "asc" },
+  });
+  const queryIds = [
+    ...new Set(
+      [...queued, ...orphans]
+        .map((job) => job.queryId)
+        .filter(Boolean)
+        .slice(0, limit),
+    ),
+  ];
+  let claimed = 0;
+  for (const queryId of queryIds) {
+    try {
+      await db.query.update({
+        where: { id: queryId },
+        data: { status: "running" },
+      });
+      if (await kickReadyJobs(queryId)) claimed += 1;
+    } catch (error) {
+      console.error("claimQueuedWork failed", queryId, error);
+    }
+  }
+  return { queryIds, claimed };
+}
+
 async function startJob(jobId: string): Promise<boolean> {
   const job = await db.job.findUniqueOrThrow({
     where: { id: jobId },
     include: { query: { include: { results: true, jobs: true } } },
   });
-  const claimed = await db.job.updateMany({
-    where: { id: jobId, status: "queued", apifyRunId: null },
+  if (job.apifyRunId) return false;
+  if (job.status !== "queued" && job.status !== "running") return false;
+  // Claim via UPDATE … RETURNING (Cohesivity updateMany rowCount is unreliable).
+  await db.job.update({
+    where: { id: jobId },
     data: { status: "running", error: null },
   });
-  if (claimed.count === 0) return false;
+  await db.query.update({
+    where: { id: job.queryId },
+    data: { status: "running" },
+  });
   try {
   const connector = getConnector(job.connectorId);
   const plan = job.query.plan as ScrapePlan;
-  const stepDependsOn = plan.steps[job.stepIndex]?.dependsOn ?? [];
+  const stepDependsOn = plan.steps?.[job.stepIndex]?.dependsOn ?? [];
+  const existingResults = (job.query.results ?? []).map(
+    (row) => row.data as ScrapedRecord,
+  );
   let params = hydrateDetailParams(
     connector.id,
     job.input,
-    job.query.results.map((row) => row.data as ScrapedRecord),
+    existingResults,
     stepDependsOn,
   );
+    let ycMeta: ReturnType<typeof ycCompaniesInputFromJobInput> | null = null;
     if (connector.id === "yc-companies") {
       const raw = params as Record<string, unknown>;
       const meta = ycCompaniesInputFromJobInput(raw);
+      ycMeta = meta;
       // Broadened retries and already-orchestrated plans must not be re-polluted
       // from the raw user pitch.
-      if (meta._broadenAttempt || raw._orchestrated) {
+      if (meta._broadenAttempt || raw._orchestrated || meta._orchestrated) {
         params = {
           query: meta.query,
           batch: meta.batch,
@@ -222,6 +282,18 @@ async function startJob(jobId: string): Promise<boolean> {
         );
         params = orchestrated.params as Record<string, unknown>;
       }
+      ycMeta = {
+        ...ycCompaniesInputFromJobInput(params as Record<string, unknown>),
+        _orchestrated: true,
+        _broadenAttempt:
+          typeof (params as Record<string, unknown>)._broadenAttempt === "number"
+            ? ((params as Record<string, unknown>)._broadenAttempt as number)
+            : meta._broadenAttempt,
+        _notice:
+          typeof (params as Record<string, unknown>)._notice === "string"
+            ? ((params as Record<string, unknown>)._notice as string)
+            : meta._notice,
+      };
     }
     if (connector.id === "youtube-content-examples") {
       const examples = { ...(params as Record<string, unknown>) };
@@ -230,7 +302,7 @@ async function startJob(jobId: string): Promise<boolean> {
         : [];
       if (existingQueries.length === 0) {
         examples.searchQueries = deriveContentExampleQueries(
-          job.query.results.map((row) => row.data as ScrapedRecord),
+          existingResults,
           brandHintFromQuery(job.query),
         );
       }
@@ -243,7 +315,7 @@ async function startJob(jobId: string): Promise<boolean> {
         : [];
       if (existingHashtags.length === 0) {
         examples.hashtags = deriveInstagramExampleHashtags(
-          job.query.results.map((row) => row.data as ScrapedRecord),
+          existingResults,
           brandHintFromQuery(job.query),
         );
       }
@@ -266,17 +338,35 @@ async function startJob(jobId: string): Promise<boolean> {
     const run = await getApify().startActor(
       prepared.actorId!,
       prepared.input,
-      { maxItems: prepared.maxItems },
+      // Do not pass maxItems here — Apify derives a sub-$0.10 charge and rejects PPE actors.
+      // Result caps live in prepared.input (maxItems / maxResults).
     );
+    const storedInput =
+      connector.id === "yc-companies" && ycMeta
+        ? {
+            ...prepared.input,
+            _orchestrated: true,
+            ...(ycMeta._broadenAttempt != null
+              ? {
+                  _broadenAttempt: ycMeta._broadenAttempt,
+                  _notice: ycMeta._notice,
+                }
+              : {}),
+          }
+        : prepared.input;
     await db.job.update({
       where: { id: job.id },
       data: {
         status: mapApifyStatus(run.status),
         apifyRunId: run.id,
         apifyDatasetId: run.defaultDatasetId ?? null,
-        input: prepared.input as Prisma.InputJsonValue,
+        input: storedInput as Prisma.InputJsonValue,
       },
     });
+    const startedStatus = mapApifyStatus(run.status);
+    if (startedStatus === "succeeded") {
+      await ingestDataset(job.id);
+    }
   } catch (error) {
     await db.job.update({
       where: { id: job.id },
@@ -483,11 +573,14 @@ async function ingestDataset(jobId: string) {
   let offset = 0;
   let total = 0;
   const records: ScrapedRecord[] = [];
+  const priorResults = (job.query.results ?? []).map(
+    (row) => row.data as ScrapedRecord,
+  );
   const ownedSignals =
     connector.id === "youtube-content-examples" ||
     connector.id === "instagram-content-examples"
       ? collectOwnedBrandSignals(
-          job.query.results.map((row) => row.data as ScrapedRecord),
+          priorResults,
           brandHintFromQuery(job.query),
         )
       : [];
@@ -496,9 +589,10 @@ async function ingestDataset(jobId: string) {
       limit: pageSize,
       offset,
     });
-    total = page.total;
+    const items = page.items ?? [];
+    total = page.total ?? items.length;
     records.push(
-      ...page.items
+      ...items
         .map((item) => connector.normalize(item))
         .filter((record) =>
           isRelevantOwnedSocialRecord(connector.id, job.input, record),
@@ -509,8 +603,8 @@ async function ingestDataset(jobId: string) {
             !isOwnedBrandCreative(record, ownedSignals),
         ),
     );
-    offset += page.items.length;
-    if (page.items.length === 0) break;
+    offset += items.length;
+    if (items.length === 0) break;
   } while (offset < total);
   if (connector.id === "yc-companies") {
     const companyCount = records.filter((record) => record.sourceType === "yc").length;
@@ -519,77 +613,133 @@ async function ingestDataset(jobId: string) {
         (job.input ?? {}) as Record<string, unknown>,
       );
       const attempt = Number(current._broadenAttempt ?? 0);
-      if (attempt < 3) {
-        try {
-          const broadened = await orchestrateYcSearch(
-            job.query.text,
-            {
-              query: current.query,
-              batch: current.batch,
-              batches: current.batches,
-              industry: current.industry,
-              tags: current.tags,
-              isHiring: current.isHiring,
-              maxItems: current.maxItems,
-            },
-            {
-              mode: "broaden",
-              previousFilters: {
-                query: current.query,
-                batch: current.batch,
-                batches: current.batches,
-                industry: current.industry,
-                tags: current.tags,
-                isHiring: current.isHiring,
-                maxItems: current.maxItems,
-              },
-            },
-          );
-          const notice =
-            broadened.rationale ||
-            "Previous YC filters returned no companies; AI broadened the search.";
-          const nextInterpretation = job.query.interpretation.includes(notice)
-            ? job.query.interpretation
-            : `${job.query.interpretation}\n\n${notice}`;
-          await db.query.update({
-            where: { id: job.queryId },
-            data: {
-              interpretation: nextInterpretation,
-              status: "running",
-            },
-          });
-          await db.job.update({
-            where: { id: job.id },
-            data: {
-              status: "queued",
-              apifyRunId: null,
-              apifyDatasetId: null,
-              itemCount: 0,
-              finishedAt: null,
-              error: null,
-              input: {
-                ...broadened.params,
-                _orchestrated: true,
-                _broadenAttempt: attempt + 1,
-                _notice: notice,
-              } as Prisma.InputJsonValue,
-            },
-          });
-          return;
-        } catch (error) {
-          // Keep the empty succeeded run rather than failing the whole query.
-          console.error("YC AI broaden failed", error);
-        }
+      if (attempt < 4) {
+        const queued = await queueYcBroadenRetry(job, current, attempt);
+        if (queued) return;
       }
     }
     const founders = records.flatMap((record) => expandYcFounders(record));
     records.push(...founders);
   }
   await ingestRecords(job.queryId, job.id, records);
+  const priorInput = (job.input ?? {}) as Record<string, unknown>;
   await db.job.update({
     where: { id: job.id },
-    data: { itemCount: records.length },
+    data: {
+      itemCount: records.length,
+      input: {
+        ...priorInput,
+        _ingested: true,
+      } as Prisma.InputJsonValue,
+    },
   });
+}
+
+async function queueYcBroadenRetry(
+  job: {
+    id: string;
+    queryId: string;
+    query: { text: string; interpretation: string };
+  },
+  current: YcCompaniesInput & { _broadenAttempt?: number; _notice?: string },
+  attempt: number,
+): Promise<boolean> {
+  const base: YcCompaniesInput = {
+    query: current.query,
+    batch: current.batch,
+    batches: current.batches,
+    industry: current.industry,
+    tags: current.tags,
+    isHiring: current.isHiring,
+    maxItems: current.maxItems,
+  };
+
+  let next: YcCompaniesInput | null = null;
+  let notice = "";
+
+  // Prefer a fast deterministic widen so empty runs recover without waiting on Claude.
+  const deterministic = broadenYcCompaniesInput(base);
+  if (deterministic) {
+    next = deterministic.input;
+    notice = deterministic.notice;
+    console.info("[yc] deterministic broaden", {
+      attempt: attempt + 1,
+      from: base,
+      to: next,
+      notice,
+    });
+  } else if (!isTestMode()) {
+    try {
+      const broadened = await orchestrateYcSearch(job.query.text, base, {
+        mode: "broaden",
+        previousFilters: base,
+      });
+      const sameFilters =
+        JSON.stringify({
+          q: broadened.params.query ?? "",
+          batch: broadened.params.batch ?? null,
+          batches: broadened.params.batches ?? [],
+          industry: broadened.params.industry ?? null,
+          tags: broadened.params.tags ?? [],
+          isHiring: Boolean(broadened.params.isHiring),
+        }) ===
+        JSON.stringify({
+          q: base.query ?? "",
+          batch: base.batch ?? null,
+          batches: base.batches ?? [],
+          industry: base.industry ?? null,
+          tags: base.tags ?? [],
+          isHiring: Boolean(base.isHiring),
+        });
+      if (!sameFilters) {
+        next = broadened.params;
+        notice =
+          broadened.rationale ||
+          "Previous YC filters returned no companies; AI broadened the search.";
+        console.info("[yc] AI broaden", {
+          attempt: attempt + 1,
+          to: next,
+          notice,
+        });
+      }
+    } catch (error) {
+      console.error("YC AI broaden failed", error);
+    }
+  }
+
+  if (!next) return false;
+
+  const nextInterpretation = job.query.interpretation.includes(notice)
+    ? job.query.interpretation
+    : `${job.query.interpretation}\n\n${notice}`;
+  await db.query.update({
+    where: { id: job.queryId },
+    data: {
+      interpretation: nextInterpretation,
+      status: "running",
+      summary: null,
+      synthesisStartedAt: null,
+    },
+  });
+  await db.job.update({
+    where: { id: job.id },
+    data: {
+      status: "queued",
+      apifyRunId: null,
+      apifyDatasetId: null,
+      itemCount: 0,
+      finishedAt: null,
+      error: null,
+      input: {
+        ...next,
+        _orchestrated: true,
+        _broadenAttempt: attempt + 1,
+        _notice: notice,
+        _ingested: false,
+      } as Prisma.InputJsonValue,
+    },
+  });
+  return true;
 }
 
 export async function syncQuery(queryId: string) {
@@ -606,7 +756,26 @@ export async function syncQuery(queryId: string) {
   for (let round = 0; round < 6; round += 1) {
     const jobs = await db.job.findMany({ where: { queryId } });
     for (const job of jobs) {
-      if (!job.apifyRunId || isTerminalJobStatus(job.status)) continue;
+      if (!job.apifyRunId) continue;
+      if (isTerminalJobStatus(job.status)) {
+        // Fast Apify runs can finish inside startJob before the next sync poll.
+        // Ingest once when a terminal job still has no counted items.
+        if (
+          job.status === "succeeded" &&
+          job.itemCount === 0 &&
+          job.apifyDatasetId &&
+          job.connectorId === "yc-companies"
+        ) {
+          const meta = ycCompaniesInputFromJobInput(
+            (job.input ?? {}) as Record<string, unknown>,
+          );
+          if ((meta._broadenAttempt ?? 0) < 4 && !meta._ingested) {
+            await ingestDataset(job.id);
+            dirty = true;
+          }
+        }
+        continue;
+      }
       const run = await apify.getRun(job.apifyRunId);
       const status = mapApifyStatus(run.status);
       if (status !== job.status) dirty = true;
@@ -711,7 +880,11 @@ export async function getQuery(queryId: string) {
     },
   });
   if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
-  return query;
+  const status = reconcileQueryStatus(
+    query.status,
+    query.jobs.map((job) => job.status),
+  );
+  return status === query.status ? query : { ...query, status };
 }
 
 export async function rerunQuery(queryId: string) {
@@ -726,7 +899,11 @@ export async function regenerateBrief(queryId: string) {
     include: { results: true, jobs: { orderBy: { stepIndex: "asc" } } },
   });
   if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
-  if (!isTerminalQueryStatus(query.status)) {
+  const status = reconcileQueryStatus(
+    query.status,
+    query.jobs.map((job) => job.status),
+  );
+  if (!isTerminalQueryStatus(status)) {
     throw new AppError("BAD_REQUEST", "Run is still in progress.", 400);
   }
   if (query.results.length === 0) {
@@ -802,7 +979,11 @@ export async function retryFailedJobs(queryId: string) {
     include: { jobs: { orderBy: { stepIndex: "asc" } } },
   });
   if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
-  if (!isTerminalQueryStatus(query.status)) {
+  const status = reconcileQueryStatus(
+    query.status,
+    query.jobs.map((job) => job.status),
+  );
+  if (!isTerminalQueryStatus(status)) {
     throw new AppError("BAD_REQUEST", "Run is still in progress.", 400);
   }
 
@@ -889,9 +1070,10 @@ export async function abortQuery(queryId: string) {
 }
 
 export async function listQueries() {
-  return db.query.findMany({
+  const queries = await db.query.findMany({
     orderBy: { createdAt: "desc" },
     include: { jobs: { orderBy: { stepIndex: "asc" } } },
     take: 30,
   });
+  return queries;
 }

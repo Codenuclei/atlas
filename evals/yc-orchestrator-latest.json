@@ -1,0 +1,16 @@
+{
+  "startedAt": "2026-08-31T11:11:59.791Z",
+  "total": 1,
+  "passed": 1,
+  "failed": 0,
+  "codeFailures": 0,
+  "results": [
+    {
+      "id": "C10",
+      "pass": true,
+      "kind": "pass",
+      "failures": []
+    }
+  ],
+  "finishedAt": "2026-08-31T11:12:11.295Z"
+}

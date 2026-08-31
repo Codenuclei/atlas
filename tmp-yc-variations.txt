@@ -1,0 +1,146 @@
+
+=== 2025_four_seasons_only ===
+input: {"query":"","batches":["Winter 2025","Spring 2025","Summer 2025","Fall 2025"],"industries":[],"tags":[],"maxResults":40}
+{
+  "name": "2025_four_seasons_only",
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 40 YC companies",
+  "itemCount": 0,
+  "algolia": "Algolia query: '<all>' filters='(batch:\"Winter 2025\" OR batch:\"Spring 2025\" OR batch:\"Summer 2025\" OR batch:\"Fall 2025\")'",
+  "batches": [
+    "Winter 2025",
+    "Spring 2025",
+    "Summer 2025",
+    "Fall 2025"
+  ],
+  "industries": [],
+  "tags": [],
+  "runId": "UNB9zrWOuishIu9Q9"
+}
+
+=== 2025_four_seasons_Education ===
+input: {"query":"","batches":["Winter 2025","Spring 2025","Summer 2025","Fall 2025"],"industries":["Education"],"tags":[],"maxResults":40}
+{
+  "name": "2025_four_seasons_Education",
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 10 YC companies",
+  "itemCount": 10,
+  "algolia": "Algolia query: '<all>' filters='(batch:\"Winter 2025\" OR batch:\"Spring 2025\" OR batch:\"Summer 2025\" OR batch:\"Fall 2025\") AND (industries:\"Education\")'",
+  "batches": [
+    "Winter 2025",
+    "Spring 2025",
+    "Summer 2025",
+    "Fall 2025"
+  ],
+  "industries": [
+    "Education"
+  ],
+  "tags": [],
+  "runId": "SC6cW5axmy0bEuBWl"
+}
+
+=== 2025_four_seasons_Fintech ===
+input: {"query":"","batches":["Winter 2025","Spring 2025","Summer 2025","Fall 2025"],"industries":["Fintech"],"tags":[],"maxResults":40}
+{
+  "name": "2025_four_seasons_Fintech",
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 36 YC companies",
+  "itemCount": 22,
+  "algolia": "Algolia query: '<all>' filters='(batch:\"Winter 2025\" OR batch:\"Spring 2025\" OR batch:\"Summer 2025\" OR batch:\"Fall 2025\") AND (industries:\"Fintech\")'",
+  "batches": [
+    "Winter 2025",
+    "Spring 2025",
+    "Summer 2025",
+    "Fall 2025"
+  ],
+  "industries": [
+    "Fintech"
+  ],
+  "tags": [],
+  "runId": "wO9ooZ38bLBiyvHyz"
+}
+
+=== Education_only_control ===
+input: {"query":"","batches":[],"industries":["Education"],"tags":[],"maxResults":40}
+{
+  "name": "Education_only_control",
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 40 YC companies",
+  "itemCount": 40,
+  "algolia": "Algolia query: '<all>' filters='(industries:\"Education\")'",
+  "batches": [],
+  "industries": [
+    "Education"
+  ],
+  "tags": [],
+  "runId": "7wbMusq756ynQHobZ"
+}
+
+=== Education_query_2025_pollute ===
+input: {"query":"2025","batches":[],"industries":["Education"],"tags":[],"maxResults":40}
+{
+  "name": "Education_query_2025_pollute",
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 14 YC companies",
+  "itemCount": 0,
+  "algolia": "Algolia query: '2025' filters='(industries:\"Education\")'",
+  "batches": [],
+  "industries": [
+    "Education"
+  ],
+  "tags": [],
+  "runId": "LkHAGpIqPihWfhPRP"
+}
+
+=== Education_past_yearish_batches ===
+input: {"query":"","batches":["Summer 2026","Spring 2026","Winter 2026","Fall 2025"],"industries":["Education"],"tags":[],"maxResults":40}
+{
+  "name": "Education_past_yearish_batches",
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 1 YC companies",
+  "itemCount": 0,
+  "algolia": "Algolia query: '<all>' filters='(batch:\"Summer 2026\" OR batch:\"Spring 2026\" OR batch:\"Winter 2026\" OR batch:\"Fall 2025\") AND (industries:\"Education\")'",
+  "batches": [
+    "Summer 2026",
+    "Spring 2026",
+    "Winter 2026",
+    "Fall 2025"
+  ],
+  "industries": [
+    "Education"
+  ],
+  "tags": [],
+  "runId": "TAk4XMc23cCBqetZa"
+}
+
+=== 2025_four_seasons_Education_AI_tag ===
+input: {"query":"","batches":["Winter 2025","Spring 2025","Summer 2025","Fall 2025"],"industries":["Education"],"tags":["AI"],"maxResults":40}
+{
+  "name": "2025_four_seasons_Education_AI_tag",
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 1 YC companies",
+  "itemCount": 0,
+  "algolia": "Algolia query: '<all>' filters='(batch:\"Winter 2025\" OR batch:\"Spring 2025\" OR batch:\"Summer 2025\" OR batch:\"Fall 2025\") AND (industries:\"Education\") AND (tags:\"AI\")'",
+  "batches": [
+    "Winter 2025",
+    "Spring 2025",
+    "Summer 2025",
+    "Fall 2025"
+  ],
+  "industries": [
+    "Education"
+  ],
+  "tags": [
+    "AI"
+  ],
+  "runId": "uLkMTlzHi9GpHLfeP"
+}
+
+=== SUMMARY ===
+2025_four_seasons_only	SUCCEEDED	items=0	Algolia query: '<all>' filters='(batch:"Winter 2025" OR batch:"Spring 2025" OR batch:"Summer 2025" OR batch:"Fall 2025")'
+2025_four_seasons_Education	SUCCEEDED	items=10	Algolia query: '<all>' filters='(batch:"Winter 2025" OR batch:"Spring 2025" OR batch:"Summer 2025" OR batch:"Fall 2025") AND (industries:"Education")'
+2025_four_seasons_Fintech	SUCCEEDED	items=22	Algolia query: '<all>' filters='(batch:"Winter 2025" OR batch:"Spring 2025" OR batch:"Summer 2025" OR batch:"Fall 2025") AND (industries:"Fintech")'
+Education_only_control	SUCCEEDED	items=40	Algolia query: '<all>' filters='(industries:"Education")'
+Education_query_2025_pollute	SUCCEEDED	items=0	Algolia query: '2025' filters='(industries:"Education")'
+Education_past_yearish_batches	SUCCEEDED	items=0	Algolia query: '<all>' filters='(batch:"Summer 2026" OR batch:"Spring 2026" OR batch:"Winter 2026" OR batch:"Fall 2025") AND (industries:"Education")'
+2025_four_seasons_Education_AI_tag	SUCCEEDED	items=0	Algolia query: '<all>' filters='(batch:"Winter 2025" OR batch:"Spring 2025" OR batch:"Summer 2025" OR batch:"Fall 2025") AND (industries:"Education") AND (tags:"AI")'

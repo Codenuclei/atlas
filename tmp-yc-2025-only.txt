@@ -1,0 +1,19 @@
+=== 2025_four_seasons_only maxResults=100 ===
+input: {"query":"","batches":["Winter 2025","Spring 2025","Summer 2025","Fall 2025"],"industries":[],"maxResults":100,"fullDetails":false}
+runId: hUmdSFvHuD4953ele
+{
+  "status": "SUCCEEDED",
+  "statusMessage": "Scraped 100 YC companies",
+  "itemCount": 100,
+  "listMeta": {
+    "total": 100,
+    "count": 1,
+    "itemsLen": 1
+  },
+  "algolia": "Algolia query: '<all>' filters='(batch:\"Winter 2025\" OR batch:\"Spring 2025\" OR batch:\"Summer 2025\" OR batch:\"Fall 2025\")'",
+  "runId": "hUmdSFvHuD4953ele",
+  "datasetId": "OB2Io5ELMF05aNnTg"
+}
+itemCount=100
+statusMessage=Scraped 100 YC companies
+algolia=Algolia query: '<all>' filters='(batch:"Winter 2025" OR batch:"Spring 2025" OR batch:"Summer 2025" OR batch:"Fall 2025")'

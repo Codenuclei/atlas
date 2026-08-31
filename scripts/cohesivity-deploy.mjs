@@ -34,6 +34,8 @@ const ENV_KEYS = [
   "APIFY_TOKEN",
   "ANTHROPIC_API_KEY",
   "APP_ACCESS_TOKEN",
+  "APP_PUBLIC_HOST",
+  "APP_PUBLIC_URL",
   "DATABASE_URL",
   "DATABASE_PROVIDER",
   "COH_APPLICATION_KEY",
@@ -177,6 +179,17 @@ async function main() {
   if (deploymentUrl) console.log(`Deployment URL: ${deploymentUrl}`);
   if (provision.json.already_provisioned) {
     console.log("railway-hosting already provisioned.");
+  }
+
+  if (deploymentUrl) {
+    try {
+      const publicHost = new URL(deploymentUrl).host;
+      fileEnv.APP_PUBLIC_URL = deploymentUrl;
+      fileEnv.APP_PUBLIC_HOST = publicHost;
+      console.log(`Public host for CORS: ${publicHost}`);
+    } catch {
+      /* ignore */
+    }
   }
 
   console.log("Setting Railway env vars...");

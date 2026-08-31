@@ -26,6 +26,41 @@ describe("YC actor id", () => {
 });
 
 describe("prepareYcActorInput", () => {
+  it("matches the live Apify actor input shape for Education-only search", () => {
+    const input = prepareYcActorInput({
+      query: "",
+      industry: "Education",
+      isHiring: false,
+      maxItems: 100,
+      _orchestrated: true,
+    });
+    expect(input).toMatchObject({
+      query: "",
+      batches: [],
+      industries: ["Education"],
+      regions: [],
+      statuses: [],
+      tags: [],
+      isHiring: false,
+      topCompaniesOnly: false,
+      slugs: [],
+      maxResults: 100,
+      fullDetails: true,
+      extractIndustry: true,
+      extractBatch: true,
+      extractFounders: true,
+      extractTags: true,
+      extractLongDescription: true,
+      extractLocation: true,
+      extractTeamSize: true,
+      extractStatus: true,
+      extractSocials: true,
+      extractLogo: true,
+      maxConcurrency: 5,
+      timeout: 30,
+    });
+  });
+
   it("maps AI-orchestrated filters into the Apify payload", () => {
     const input = prepareYcActorInput({
       query: "",
@@ -33,7 +68,7 @@ describe("prepareYcActorInput", () => {
       industry: "Education",
       tags: ["AI", "Education"],
       isHiring: false,
-      maxItems: 50,
+      maxItems: 100,
       _orchestrated: true,
     });
     expect(input.fullDetails).toBe(true);
@@ -42,7 +77,9 @@ describe("prepareYcActorInput", () => {
     expect(input.industries).toEqual(["Education"]);
     expect(input.tags).toEqual(["AI"]);
     expect(input.query).toBe("");
-    expect(input.maxResults).toBe(50);
+    expect(input.maxResults).toBe(100);
+    expect(input.topCompaniesOnly).toBe(false);
+    expect(input.maxConcurrency).toBe(5);
   });
 
   it("clears sentence-length free-text instead of sending pitches to Apify", () => {
@@ -86,6 +123,25 @@ describe("ycKeywordsFrom / season helpers used by AI tools", () => {
       "Summer 2025",
       "Fall 2025",
     ]);
+  });
+
+  it("builds Apify JSON for education companies in calendar 2025", () => {
+    const input = prepareYcActorInput({
+      industry: "Education",
+      batches: ycBatchesForYear(2025),
+      maxItems: 100,
+      isHiring: false,
+    });
+    expect(input.batches).toEqual([
+      "Winter 2025",
+      "Spring 2025",
+      "Summer 2025",
+      "Fall 2025",
+    ]);
+    expect(input.industries).toEqual(["Education"]);
+    expect(input.tags).toEqual([]);
+    expect(input.query).toBe("");
+    expect(input.maxResults).toBe(100);
   });
 
   it("maps a months lookback into seasons without hardcoding year windows", () => {
@@ -158,6 +214,22 @@ describe("broadenYcCompaniesInput", () => {
     });
     expect(result?.input.batches).toBeUndefined();
     expect(result?.input.industry).toBe("Fintech");
+  });
+
+  it("drops stacked AI tag first when Education∩AI is too sparse", () => {
+    const result = broadenYcCompaniesInput(
+      {
+        industry: "Education",
+        tags: ["AI"],
+        batches: ["Fall 2025", "Summer 2026"],
+        maxItems: 50,
+      },
+      { sparse: true },
+    );
+    expect(result?.input.tags).toBeUndefined();
+    expect(result?.input.industry).toBe("Education");
+    expect(result?.input.batches).toEqual(["Fall 2025", "Summer 2026"]);
+    expect(result?.notice).toMatch(/Only a few companies matched those tags/i);
   });
 });
 

@@ -1,0 +1,49 @@
+# .cohesivity — Cohesivity tenant credentials and guidelines.
+# - Lives at the root of your project; holds this project's tenant credentials.
+# - Carries secrets, so keep it out of version control (the quickstart gitignores it).
+# - For full reference: https://cohesivity.ai/llms.txt (concise) and https://cohesivity.ai/llms-full.txt (long-form).
+#
+tenant_id=azure-condor-drafting
+coh_management_key=coh_man_28pt9e7al5ejhe21ysll
+coh_application_key=coh_app_4bn63ncx8936rji773qj
+expires_at=2026-08-28T11:31:11.210Z
+tenant_lifecycle=ephemeral
+runtime_profile=v1-343
+# runtime_profile pins this tenant to a stable runtime version. Agents can ignore it unless the platform explicitly tells you otherwise.
+#
+# -- GUIDELINES (bootstrap) -------------------------------------
+# These are this project's tenant credentials. The keys stay valid, so reuse them rather than creating another tenant.
+#
+# KEY SECRECY
+#   Both coh_management_key and coh_application_key are SECRETS. Neither belongs in
+#   browser JS, mobile app bundles, or any client-side code. All /edge/* calls
+#   originate server-side: a Vercel API route (vercel-hosting), a Cloudflare
+#   Worker (cloudflare-workers), or your own server tier. The ?key=<coh_application_key>
+#   edge bootstrap pattern is for server-to-server use only. For SPA-only architectures,
+#   provision cloudflare-workers as your minimal proxy tier.
+#
+# USER-AGENT ON YOUR OWN CALLS
+#   Setup attributed itself — you do not need to name your runtime anywhere.
+#   For the requests you make from here on, send any non-default User-Agent:
+#   Cloudflare's WAF rejects default Python urllib / Go net/http / Node undici
+#   clients with HTTP 403 (error 1010), which is not a Cohesivity-shaped error.
+#
+# PROVIDER PRICING
+#   Successful OpenAI, AI Gateway, Deepgram, and Exa usage is billed at
+#   provider cost plus 10%, rounded up to the nearest cent per settled charge.
+#   Failed provider calls are not billed. Current details: https://cohesivity.ai/pricing
+#
+# THE COHESIVITY SKILL
+#   The skill is the agent playbook: the resource catalog, claim, billing, the
+#   feedback discount, realtime, identity, and the exact endpoint paths and auth
+#   flows. Reading it keeps the build correct: without it the usual misses are
+#   /gw/ vs /edge/, the token-in-callback-URL flow instead of the code-exchange
+#   OAuth flow, and /chat/completions instead of /v1/responses. Either installer
+#   below sets up (or updates) it for Claude Code, Cursor, and Codex; both are
+#   idempotent — they reuse this .cohesivity rather than creating another tenant:
+#     npx @cohesivity/init
+#   or, without Node:
+#     curl -fsSL https://cohesivity.ai/quickstart.sh | bash
+#   Current skill version: 84fbece3c00b
+#
+# Full reference: https://cohesivity.ai/llms.txt

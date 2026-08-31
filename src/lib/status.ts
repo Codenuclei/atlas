@@ -78,3 +78,17 @@ export function reconcileQueryStatus(
   const derived = deriveQueryStatus(jobStatuses);
   return isTerminalQueryStatus(derived) ? derived : (status as QueryStatus);
 }
+
+/** True when a terminal success still needs dataset ingest. */
+export function jobNeedsDatasetIngest(job: {
+  status: string;
+  itemCount: number;
+  apifyDatasetId: string | null;
+  input: unknown;
+}): boolean {
+  if (job.status !== "succeeded") return false;
+  if (!job.apifyDatasetId) return false;
+  const meta = (job.input ?? {}) as { _ingested?: boolean };
+  if (meta._ingested) return false;
+  return job.itemCount === 0;
+}

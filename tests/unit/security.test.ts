@@ -59,6 +59,23 @@ describe("security boundaries", () => {
     expect(() => assertSameOrigin(request)).not.toThrow();
   });
 
+  it("allows *.cohesivity.app origin when app is Cohesivity-hosted without forwarded host", () => {
+    const previous = process.env.COH_APPLICATION_KEY;
+    process.env.COH_APPLICATION_KEY = "coh_app_test_placeholder";
+    try {
+      const request = new Request("http://internal.railway.invalid/api/plan", {
+        headers: {
+          origin: "https://noted-koala-cooking.cohesivity.app",
+          host: "internal.railway.invalid",
+        },
+      });
+      expect(() => assertSameOrigin(request)).not.toThrow();
+    } finally {
+      if (previous === undefined) delete process.env.COH_APPLICATION_KEY;
+      else process.env.COH_APPLICATION_KEY = previous;
+    }
+  });
+
   it("allows localhost but blocks remote API access without a token", () => {
     expect(() =>
       assertApiAccess(new Request("http://localhost:3000/api/health")),

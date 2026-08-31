@@ -329,12 +329,32 @@ export function createCohesivityDb() {
           jobsByQuery.set(job.queryId, list);
         }
       }
+      const resultsByQuery = new Map<string, ReturnType<typeof mapResult>[]>();
+      if (args.include?.results && ids.length) {
+        const order =
+          typeof args.include.results === "object" &&
+          args.include.results.orderBy?.score === "asc"
+            ? `"score" ASC NULLS LAST`
+            : `"score" DESC NULLS LAST`;
+        const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+        const resultRows = await pgQuery(
+          `SELECT * FROM "Result" WHERE "queryId" IN (${placeholders}) ORDER BY ${order}`,
+          ids,
+        );
+        for (const row of resultRows.rows.map(mapResult)) {
+          const list = resultsByQuery.get(row.queryId) ?? [];
+          list.push(row);
+          resultsByQuery.set(row.queryId, list);
+        }
+      }
       return mapped.map((row) => ({
         ...row,
         ...(args.include?.jobs
           ? { jobs: jobsByQuery.get(row.id) ?? [] }
           : {}),
-        ...(args.include?.results ? { results: [] } : {}),
+        ...(args.include?.results
+          ? { results: resultsByQuery.get(row.id) ?? [] }
+          : {}),
       }));
     },
 
@@ -444,6 +464,24 @@ export function createCohesivityDb() {
       return mapJob(result.rows[0]);
     },
 
+    /**
+     * Atomic start claim: only one worker can take a queued/orphan job.
+     * Uses UPDATE … RETURNING so Cohesivity rowCount quirks cannot double-start Apify.
+     */
+    async claimStart(id: string) {
+      await ready();
+      const result = await pgQuery(
+        `UPDATE "Job"
+         SET "status" = 'running', "error" = NULL
+         WHERE "id" = $1
+           AND "apifyRunId" IS NULL
+           AND "status" IN ('queued', 'running')
+         RETURNING *`,
+        [id],
+      );
+      return result.rows[0] ? mapJob(result.rows[0]) : null;
+    },
+
     async updateMany(args: {
       where: Record<string, unknown>;
       data: Record<string, unknown>;
@@ -492,9 +530,12 @@ export function createCohesivityDb() {
       update: Record<string, unknown>;
     }) {
       await ready();
+      // Prefer merge-aware update when the row exists; fall back to atomic
+      // INSERT … ON CONFLICT so concurrent ingest cannot crash on the unique key.
       const existing = await resultApi.findUnique({ where: args.where });
       if (existing) {
         const set = buildSetClause(args.update);
+        if (!set.sql) return existing;
         const result = await pgQuery(
           `UPDATE "Result" SET ${set.sql} WHERE "id" = $${set.nextIndex} RETURNING *`,
           [...set.params, existing.id],
@@ -506,7 +547,14 @@ export function createCohesivityDb() {
       const result = await pgQuery(
         `INSERT INTO "Result" (
           "id","queryId","jobId","sourceType","externalId","mergeKey","score","data"
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING *`,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+        ON CONFLICT ("queryId", "mergeKey") DO UPDATE SET
+          "jobId" = EXCLUDED."jobId",
+          "sourceType" = EXCLUDED."sourceType",
+          "externalId" = EXCLUDED."externalId",
+          "score" = COALESCE(EXCLUDED."score", "Result"."score"),
+          "data" = EXCLUDED."data"
+        RETURNING *`,
         [
           id,
           args.create.queryId,

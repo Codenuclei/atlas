@@ -42,6 +42,30 @@ export function invalidateCache(...keys: string[]): void {
 
 type Json = Record<string, unknown>;
 
+async function readJsonBody<T extends Json>(
+  response: Response,
+): Promise<T & { hash?: string; error?: string; message?: string; unchanged?: boolean }> {
+  const text = await response.text();
+  if (!text) {
+    return {} as T & { hash?: string; error?: string; message?: string };
+  }
+  try {
+    return JSON.parse(text) as T & {
+      hash?: string;
+      error?: string;
+      message?: string;
+      unchanged?: boolean;
+    };
+  } catch {
+    const looksHtml = /^\s*</.test(text) || text.includes("<!DOCTYPE");
+    throw new Error(
+      looksHtml
+        ? `Server returned HTML instead of JSON (${response.status}). The app may be redeploying — retry in a moment.`
+        : `Invalid JSON from server (${response.status}).`,
+    );
+  }
+}
+
 /**
  * GET with conditional hash. Returns parsed body on 200, null on 304.
  * Automatically stores the hash for the next round trip.
@@ -58,7 +82,7 @@ export async function fetchWithHash<T extends Json>(
   );
   if (response.status === 304 && cached) return null;
   const hash = response.headers.get("x-data-hash") ?? "";
-  const body = (await response.json()) as T & { hash?: string; error?: string; message?: string };
+  const body = await readJsonBody<T>(response);
   if (!response.ok) {
     throw new Error(body.message || body.error || `Request failed (${response.status})`);
   }
@@ -80,12 +104,7 @@ export async function postWithHash<T extends Json>(
     method: "POST",
     headers: cached ? { "x-known-hash": cached.hash } : undefined,
   });
-  const body = (await response.json()) as T & {
-    hash?: string;
-    unchanged?: boolean;
-    error?: string;
-    message?: string;
-  };
+  const body = await readJsonBody<T>(response);
   if (!response.ok) {
     throw new Error(body.message || body.error || `Request failed (${response.status})`);
   }

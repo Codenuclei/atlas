@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { db } from "@/lib/db";
+import { db, dbProvider } from "@/lib/db";
 import { getApify } from "@/lib/apify/client";
 import { getConnector } from "@/lib/connectors/registry";
 import { validatePlan } from "@/lib/ai/planner";
@@ -13,6 +13,7 @@ import {
   enrichYcCompaniesInput,
   ycCompaniesInputFromJobInput,
   ycCompanyNames,
+  MIN_YC_COMPANIES_BEFORE_BROADEN,
   type YcCompaniesInput,
 } from "@/lib/connectors/yc-companies";
 import { orchestrateYcSearch } from "@/lib/ai/yc-search-orchestrator";
@@ -23,6 +24,7 @@ import {
   isActiveJobStatus,
   isTerminalJobStatus,
   isTerminalQueryStatus,
+  jobNeedsDatasetIngest,
   mapApifyStatus,
   reconcileQueryStatus,
 } from "@/lib/status";
@@ -40,9 +42,28 @@ import {
   isOwnedBrandCreative,
 } from "@/lib/content-research";
 import { isTestMode } from "@/lib/utils";
+import type { CohesivityDb } from "@/lib/db/cohesivity-client";
 
 function parseParams(connectorId: string, params: unknown) {
   return getConnector(connectorId).inputSchema.parse(params);
+}
+
+async function claimJobStart(jobId: string): Promise<boolean> {
+  if (dbProvider === "cohesivity") {
+    const claimed = await (
+      db as unknown as CohesivityDb
+    ).job.claimStart(jobId);
+    return Boolean(claimed);
+  }
+  const result = await db.job.updateMany({
+    where: {
+      id: jobId,
+      apifyRunId: null,
+      status: { in: ["queued", "running"] },
+    },
+    data: { status: "running", error: null },
+  });
+  return result.count > 0;
 }
 
 export async function createQueryFromPlan(text: string, planInput: ScrapePlan) {
@@ -197,14 +218,14 @@ export async function claimQueuedWork(limit = 20) {
     where: { status: "running", apifyRunId: null },
     orderBy: { stepIndex: "asc" },
   });
+  // Cap work before kickReadyJobs to stay under the ephemeral SQL budget.
   const queryIds = [
     ...new Set(
       [...queued, ...orphans]
         .map((job) => job.queryId)
-        .filter(Boolean)
-        .slice(0, limit),
+        .filter(Boolean),
     ),
-  ];
+  ].slice(0, Math.max(1, Math.floor(limit)));
   let claimed = 0;
   for (const queryId of queryIds) {
     try {
@@ -227,11 +248,8 @@ async function startJob(jobId: string): Promise<boolean> {
   });
   if (job.apifyRunId) return false;
   if (job.status !== "queued" && job.status !== "running") return false;
-  // Claim via UPDATE … RETURNING (Cohesivity updateMany rowCount is unreliable).
-  await db.job.update({
-    where: { id: jobId },
-    data: { status: "running", error: null },
-  });
+  // Atomic claim — Cohesivity updateMany rowCount is unreliable; RETURNING is not.
+  if (!(await claimJobStart(jobId))) return false;
   await db.query.update({
     where: { id: job.queryId },
     data: { status: "running" },
@@ -354,16 +372,17 @@ async function startJob(jobId: string): Promise<boolean> {
               : {}),
           }
         : prepared.input;
+    const startedStatus = mapApifyStatus(run.status);
     await db.job.update({
       where: { id: job.id },
       data: {
-        status: mapApifyStatus(run.status),
+        status: startedStatus,
         apifyRunId: run.id,
         apifyDatasetId: run.defaultDatasetId ?? null,
         input: storedInput as Prisma.InputJsonValue,
+        finishedAt: isTerminalJobStatus(startedStatus) ? new Date() : null,
       },
     });
-    const startedStatus = mapApifyStatus(run.status);
     if (startedStatus === "succeeded") {
       await ingestDataset(job.id);
     }
@@ -608,13 +627,18 @@ async function ingestDataset(jobId: string) {
   } while (offset < total);
   if (connector.id === "yc-companies") {
     const companyCount = records.filter((record) => record.sourceType === "yc").length;
-    if (companyCount === 0) {
+    // Broaden on sparse hits too — Education∩AI∩past-year often returns 1 company
+    // and used to stop there because broaden only ran on zero.
+    if (companyCount < MIN_YC_COMPANIES_BEFORE_BROADEN) {
       const current = ycCompaniesInputFromJobInput(
         (job.input ?? {}) as Record<string, unknown>,
       );
       const attempt = Number(current._broadenAttempt ?? 0);
       if (attempt < 4) {
-        const queued = await queueYcBroadenRetry(job, current, attempt);
+        const queued = await queueYcBroadenRetry(job, current, attempt, {
+          sparse: companyCount > 0,
+          companyCount,
+        });
         if (queued) return;
       }
     }
@@ -627,6 +651,7 @@ async function ingestDataset(jobId: string) {
     where: { id: job.id },
     data: {
       itemCount: records.length,
+      finishedAt: job.finishedAt ?? new Date(),
       input: {
         ...priorInput,
         _ingested: true,
@@ -643,6 +668,7 @@ async function queueYcBroadenRetry(
   },
   current: YcCompaniesInput & { _broadenAttempt?: number; _notice?: string },
   attempt: number,
+  options: { sparse?: boolean; companyCount?: number } = {},
 ): Promise<boolean> {
   const base: YcCompaniesInput = {
     query: current.query,
@@ -656,14 +682,17 @@ async function queueYcBroadenRetry(
 
   let next: YcCompaniesInput | null = null;
   let notice = "";
+  const sparse = Boolean(options.sparse);
 
-  // Prefer a fast deterministic widen so empty runs recover without waiting on Claude.
-  const deterministic = broadenYcCompaniesInput(base);
+  // Prefer a fast deterministic widen so empty/sparse runs recover without waiting on Claude.
+  const deterministic = broadenYcCompaniesInput(base, { sparse });
   if (deterministic) {
     next = deterministic.input;
     notice = deterministic.notice;
     console.info("[yc] deterministic broaden", {
       attempt: attempt + 1,
+      companyCount: options.companyCount ?? 0,
+      sparse,
       from: base,
       to: next,
       notice,
@@ -695,9 +724,12 @@ async function queueYcBroadenRetry(
         next = broadened.params;
         notice =
           broadened.rationale ||
-          "Previous YC filters returned no companies; AI broadened the search.";
+          (sparse
+            ? `Previous YC filters only returned ${options.companyCount ?? 0} companies; AI broadened the search.`
+            : "Previous YC filters returned no companies; AI broadened the search.");
         console.info("[yc] AI broaden", {
           attempt: attempt + 1,
+          companyCount: options.companyCount ?? 0,
           to: next,
           notice,
         });
@@ -708,6 +740,10 @@ async function queueYcBroadenRetry(
   }
 
   if (!next) return false;
+
+  // Drop stale rows from the previous empty/narrow attempt so Evidence
+  // cannot show leftovers while the job reports 0 items.
+  await db.result.deleteMany({ where: { jobId: job.id } });
 
   const nextInterpretation = job.query.interpretation.includes(notice)
     ? job.query.interpretation
@@ -759,18 +795,26 @@ export async function syncQuery(queryId: string) {
       if (!job.apifyRunId) continue;
       if (isTerminalJobStatus(job.status)) {
         // Fast Apify runs can finish inside startJob before the next sync poll.
-        // Ingest once when a terminal job still has no counted items.
-        if (
+        // Re-ingest any connector that succeeded with a dataset but never counted items.
+        if (jobNeedsDatasetIngest(job)) {
+          await ingestDataset(job.id);
+          dirty = true;
+        } else if (
           job.status === "succeeded" &&
-          job.itemCount === 0 &&
-          job.apifyDatasetId &&
-          job.connectorId === "yc-companies"
+          job.itemCount === 0
         ) {
-          const meta = ycCompaniesInputFromJobInput(
-            (job.input ?? {}) as Record<string, unknown>,
-          );
-          if ((meta._broadenAttempt ?? 0) < 4 && !meta._ingested) {
-            await ingestDataset(job.id);
+          // Repair drift: results exist but itemCount never got written (e.g. 429 mid-update).
+          const counted = await db.result.count({ where: { jobId: job.id } });
+          if (counted > 0) {
+            const priorInput = (job.input ?? {}) as Record<string, unknown>;
+            await db.job.update({
+              where: { id: job.id },
+              data: {
+                itemCount: counted,
+                input: { ...priorInput, _ingested: true } as Prisma.InputJsonValue,
+                finishedAt: job.finishedAt ?? new Date(),
+              },
+            });
             dirty = true;
           }
         }
@@ -884,7 +928,18 @@ export async function getQuery(queryId: string) {
     query.status,
     query.jobs.map((job) => job.status),
   );
-  return status === query.status ? query : { ...query, status };
+  if (status === query.status) return query;
+  // Persist the correction so list/history stop showing stale Queued forever.
+  // Best-effort: a 429 here must not hide the already-loaded query.
+  try {
+    await db.query.update({
+      where: { id: queryId },
+      data: { status },
+    });
+  } catch (error) {
+    console.error("getQuery status persist failed", queryId, error);
+  }
+  return { ...query, status };
 }
 
 export async function rerunQuery(queryId: string) {
@@ -1075,5 +1130,11 @@ export async function listQueries() {
     include: { jobs: { orderBy: { stepIndex: "asc" } } },
     take: 30,
   });
-  return queries;
+  return queries.map((query) => {
+    const status = reconcileQueryStatus(
+      query.status,
+      (query.jobs ?? []).map((job) => job.status),
+    );
+    return status === query.status ? query : { ...query, status };
+  });
 }

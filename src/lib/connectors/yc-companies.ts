@@ -311,34 +311,35 @@ function industryAsTag(industry: string | undefined): string | undefined {
 }
 
 /**
- * Loosen YC filters when Apify returns zero companies so users still get a
- * useful directory hit instead of an empty succeeded run.
+ * Loosen YC filters when Apify returns too few companies so users still get a
+ * useful directory hit instead of a near-empty succeeded run.
  * Order: clear free-text → drop tags → drop hiring → industry↔tag swap →
  * drop batch (keep industry/tag).
  */
 export function broadenYcCompaniesInput(
   input: YcCompaniesInput,
+  options: { sparse?: boolean } = {},
 ): { input: YcCompaniesInput; notice: string } | null {
+  const why = options.sparse
+    ? "Only a few companies matched"
+    : "No companies matched";
   const query = input.query?.trim();
   if (query) {
     return {
       input: { ...input, query: undefined },
-      notice:
-        "No companies matched the free-text filter, so the search was broadened to directory filters only.",
+      notice: `${why} the free-text filter, so the search was broadened to directory filters only.`,
     };
   }
   if (input.tags && input.tags.length) {
     return {
       input: { ...input, tags: undefined },
-      notice:
-        "No companies matched those tags, so the tag filters were removed while keeping industry/batch.",
+      notice: `${why} those tags, so the tag filters were removed while keeping industry/batch.`,
     };
   }
   if (input.isHiring) {
     return {
       input: { ...input, isHiring: false },
-      notice:
-        "No companies were marked hiring for those filters, so the hiring-only constraint was removed.",
+      notice: `${why} the hiring-only constraint, so it was removed.`,
     };
   }
   // "Education" (and similar) are both industry and tag on YC — try the tag facet
@@ -351,21 +352,21 @@ export function broadenYcCompaniesInput(
         industry: undefined,
         tags: [asTag],
       },
-      notice: `No companies matched industry ${input.industry}; retrying with the "${asTag}" directory tag instead.`,
+      notice: `${why} industry ${input.industry}; retrying with the "${asTag}" directory tag instead.`,
     };
   }
   if ((input.batch || (input.batches && input.batches.length)) && input.industry) {
     const label = input.batch || input.batches?.join(", ");
     return {
       input: { ...input, batch: undefined, batches: undefined },
-      notice: `No companies matched batch ${label}; showing ${input.industry} companies across YC batches instead.`,
+      notice: `${why} batch ${label}; showing ${input.industry} companies across YC batches instead.`,
     };
   }
   if ((input.batch || (input.batches && input.batches.length)) && input.tags?.length) {
     const label = input.batch || input.batches?.join(", ");
     return {
       input: { ...input, batch: undefined, batches: undefined },
-      notice: `No companies matched batch ${label}; showing tag-filtered companies across YC batches instead.`,
+      notice: `${why} batch ${label}; showing tag-filtered companies across YC batches instead.`,
     };
   }
   if (input.batch || (input.batches && input.batches.length)) {
@@ -378,16 +379,21 @@ export function broadenYcCompaniesInput(
         batches: undefined,
         query: input.query || "startup",
       },
-      notice: `No companies matched batch ${label}; widened beyond that season window.`,
+      notice: `${why} batch ${label}; widened beyond that season window.`,
     };
   }
   // Never drop the last industry/tag filter — empty filters scrape the whole directory.
   return null;
 }
 
+/** Retry when Apify returns fewer companies than this (not only zero). */
+export const MIN_YC_COMPANIES_BEFORE_BROADEN = 5;
+
 /**
- * Convert orchestrator/AI filters into the Apify actor payload.
- * Does NOT re-derive filters from free text — the tool orchestrator owns that.
+ * Convert orchestrator filters into the exact Apify actor input object.
+ * Shape must match apivault_labs/yc-companies-scraper input schema —
+ * missing fields or wrong stacking changes the Algolia filters and returns
+ * the wrong companies (live: industries:["Education"] → filters='(industries:"Education")').
  */
 export function prepareYcActorInput(input: YcCompaniesInput) {
   const batches =
@@ -399,15 +405,22 @@ export function prepareYcActorInput(input: YcCompaniesInput) {
   const filteredTags = (input.tags ?? []).filter(
     (tag) => tag.toLowerCase() !== input.industry?.toLowerCase(),
   );
-  const maxItems = clampMaxItems(input.maxItems, 50);
+  // Actor default / docs example is 100; 0 = all matching.
+  const maxItems = clampMaxItems(input.maxItems, 100);
   const query = (input.query ?? "").trim();
+  const safeQuery =
+    query.split(/\s+/).filter(Boolean).length > 4 ? "" : query;
 
   return {
-    query: query.split(/\s+/).filter(Boolean).length > 4 ? "" : query,
+    query: safeQuery,
     batches,
     industries: input.industry ? [input.industry] : [],
+    regions: [] as string[],
+    statuses: [] as string[],
     tags: filteredTags,
     isHiring: Boolean(input.isHiring),
+    topCompaniesOnly: false,
+    slugs: [] as string[],
     maxResults: maxItems,
     fullDetails: true,
     extractIndustry: true,
@@ -420,6 +433,8 @@ export function prepareYcActorInput(input: YcCompaniesInput) {
     extractFounders: true,
     extractLongDescription: true,
     extractLogo: true,
+    maxConcurrency: 5,
+    timeout: 30,
   };
 }
 

@@ -46,20 +46,44 @@ export function assertApiAccess(request: Request) {
   }
 }
 
+function normalizeHost(host: string) {
+  return host.replace(/:\d+$/, "").toLowerCase();
+}
+
 function allowedHosts(request: Request): Set<string> {
   const hosts = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    const raw = value?.split(",")[0]?.trim();
+    if (!raw) return;
+    hosts.add(normalizeHost(raw));
+  };
   try {
-    hosts.add(new URL(request.url).host);
+    add(new URL(request.url).host);
   } catch {
     /* ignore malformed request url */
   }
   // Behind Cohesivity / Railway proxies, request.url is often the upstream
   // host while the browser Origin is the public *.cohesivity.app host.
-  for (const header of ["x-forwarded-host", "host"] as const) {
-    const raw = request.headers.get(header)?.split(",")[0]?.trim();
-    if (raw) hosts.add(raw);
+  for (const header of ["x-forwarded-host", "x-original-host", "host"] as const) {
+    add(request.headers.get(header));
+  }
+  add(process.env.APP_PUBLIC_HOST);
+  add(process.env.COHESIVITY_PUBLIC_HOST);
+  const publicUrl =
+    process.env.APP_PUBLIC_URL?.trim() ||
+    process.env.COHESIVITY_DEPLOYMENT_URL?.trim();
+  if (publicUrl) {
+    try {
+      add(new URL(publicUrl).host);
+    } catch {
+      /* ignore */
+    }
   }
   return hosts;
+}
+
+function isCohesivityPublicHost(host: string) {
+  return host === "cohesivity.app" || host.endsWith(".cohesivity.app");
 }
 
 export function assertSameOrigin(request: Request) {
@@ -67,11 +91,22 @@ export function assertSameOrigin(request: Request) {
   if (!origin) return;
   let originHost: string;
   try {
-    originHost = new URL(origin).host;
+    originHost = normalizeHost(new URL(origin).host);
   } catch {
     throw new AppError("UNAUTHORIZED", "Cross-origin request rejected.", 403);
   }
-  if (allowedHosts(request).has(originHost)) return;
+  const allowed = allowedHosts(request);
+  if (allowed.has(originHost)) return;
+
+  // Cohesivity edge often forwards an internal Railway host while the browser
+  // Origin is https://<tenant>.cohesivity.app. Trust that public Origin when
+  // this process is the Cohesivity-hosted app (or any allowed host is too).
+  const hostedOnCohesivity =
+    Boolean(process.env.COH_APPLICATION_KEY?.trim()) ||
+    process.env.DATABASE_PROVIDER === "cohesivity" ||
+    [...allowed].some(isCohesivityPublicHost);
+  if (hostedOnCohesivity && isCohesivityPublicHost(originHost)) return;
+
   throw new AppError("UNAUTHORIZED", "Cross-origin request rejected.", 403);
 }
 

@@ -438,8 +438,8 @@ export function prepareYcActorInput(input: YcCompaniesInput) {
   };
 }
 
-function companyMeta(raw: Record<string, unknown>) {
-  const batch = firstText(raw.batch, raw.batchCode);
+export function companyMeta(raw: Record<string, unknown>) {
+  const batch = firstText(raw.batch, raw.batchCode, raw.batchName);
   const industry = firstText(
     raw.industry,
     raw.subindustry,
@@ -450,28 +450,85 @@ function companyMeta(raw: Record<string, unknown>) {
     raw.one_liner,
     raw.description,
     raw.longDescription,
+    raw.long_description,
   );
   const parts = [batch, industry, oneLiner].filter(Boolean);
   return { batch, industry, oneLiner, subtitle: parts.join(" · ") };
 }
 
+function isYcDirectoryUrl(value: string): boolean {
+  return /ycombinator\.com\/companies\//i.test(value);
+}
+
+/** Resolve company website vs YC directory URL from Apify field variants. */
+export function ycCompanyLinks(raw: Record<string, unknown>): {
+  website: string;
+  ycUrl: string;
+} {
+  const slug = firstText(raw.slug, raw.objectID);
+  const websiteCandidate = firstText(
+    raw.website,
+    raw.companyWebsite,
+    raw.site,
+    raw.homepage,
+  );
+  const urlField = firstText(raw.url);
+  const explicitYc = firstText(raw.ycUrl, raw.ycProfileUrl, raw.yc_url);
+  const fromSlug = slug
+    ? `https://www.ycombinator.com/companies/${slug}`
+    : "";
+
+  let ycUrl = explicitYc;
+  let website = websiteCandidate;
+
+  if (!ycUrl && isYcDirectoryUrl(urlField)) {
+    ycUrl = urlField;
+  }
+  if (!website && urlField && !isYcDirectoryUrl(urlField)) {
+    website = urlField;
+  }
+  if (!ycUrl) ycUrl = fromSlug;
+
+  // Never treat the YC directory page as the company website.
+  if (website && isYcDirectoryUrl(website)) {
+    if (!ycUrl) ycUrl = website;
+    website = "";
+  }
+
+  return { website, ycUrl };
+}
+
 export function normalizeYcCompany(raw: Record<string, unknown>): ScrapedRecord {
   const slug = firstText(raw.slug, raw.objectID);
   const meta = companyMeta(raw);
+  const links = ycCompanyLinks(raw);
+  const longDescription = firstText(
+    raw.longDescription,
+    raw.long_description,
+  );
+  // Company is the primary record: YC directory URL when available, else website.
+  const primaryUrl = links.ycUrl || links.website || firstText(raw.url);
   return {
     sourceType: "yc",
     externalId:
       firstText(raw.companyId, raw.id, raw.objectID, slug, raw.name) || "yc",
     title: firstText(raw.name) || "YC company",
     subtitle: meta.subtitle || meta.oneLiner || meta.industry,
-    url:
-      firstText(raw.url, raw.ycProfileUrl, raw.ycUrl) ||
-      (slug
-        ? `https://www.ycombinator.com/companies/${slug}`
-        : firstText(raw.website)),
+    url: primaryUrl,
     location: firstText(raw.location, raw.city, raw.country, raw.all_locations),
     imageUrl: firstText(raw.logoUrl, raw.small_logo_thumb_url, raw.logo),
-    raw,
+    raw: {
+      ...raw,
+      // Canonical fields so synthesis / founders never lose company shape.
+      oneLiner: meta.oneLiner,
+      website: links.website,
+      ycUrl: links.ycUrl,
+      longDescription,
+      teamSize: raw.teamSize ?? raw.team_size ?? raw.employeeCount,
+      status: raw.status,
+      batch: meta.batch || raw.batch,
+      industry: meta.industry || raw.industry,
+    },
   };
 }
 
@@ -485,12 +542,20 @@ type FounderRaw = {
   twitter?: unknown;
 };
 
-/** Expand YC company founders into LinkedIn-ready profile records. */
+/**
+ * Expand YC company founders into LinkedIn-ready profile records.
+ * Companies stay primary — this adds founders alongside, linked back with
+ * company one-liner / website / YC URL (does not replace company rows).
+ */
 export function expandYcFounders(company: ScrapedRecord): ScrapedRecord[] {
   const founders = Array.isArray(company.raw.founders)
     ? (company.raw.founders as FounderRaw[])
     : [];
   const meta = companyMeta(company.raw);
+  const links = ycCompanyLinks(company.raw);
+  const companyWebsite = links.website || firstText(company.raw.website);
+  const companyYcUrl =
+    links.ycUrl || firstText(company.raw.ycUrl) || company.url;
   const out: ScrapedRecord[] = [];
 
   for (const founder of founders) {
@@ -514,9 +579,14 @@ export function expandYcFounders(company: ScrapedRecord): ScrapedRecord[] {
       raw: {
         researchRole: "yc-founder",
         companyName: company.title,
-        companyUrl: company.url,
+        companyUrl: companyYcUrl,
+        companyYcUrl,
+        companyWebsite,
+        companyOneLiner: meta.oneLiner,
         companyBatch: meta.batch,
         companyIndustry: meta.industry,
+        companyTeamSize: company.raw.teamSize,
+        companyStatus: company.raw.status,
         founderTitle: title,
         bio,
         linkedinUrl: linkedin,

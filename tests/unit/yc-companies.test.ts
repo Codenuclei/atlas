@@ -165,6 +165,35 @@ describe("normalizeYcCompany", () => {
     );
     expect(record.sourceType).toBe("yc");
   });
+
+  it("keeps YC directory URL primary and website/oneLiner on raw", () => {
+    const record = normalizeYcCompany(ycFixture);
+    expect(record.url).toBe("https://www.ycombinator.com/companies/stripe");
+    expect(record.raw.website).toBe("https://stripe.com");
+    expect(record.raw.ycUrl).toBe(
+      "https://www.ycombinator.com/companies/stripe",
+    );
+    expect(record.raw.oneLiner).toBe("Payments infrastructure");
+    expect(record.raw.longDescription).toContain("economic infrastructure");
+    expect(record.raw.teamSize).toBe(8000);
+    expect(record.raw.status).toBe("Public");
+  });
+
+  it("derives YC URL from slug when Apify omits url/ycUrl", () => {
+    const record = normalizeYcCompany({
+      name: "Ramp",
+      slug: "ramp",
+      website: "https://ramp.com",
+      oneLiner: "Corporate cards",
+      batch: "Winter 2020",
+      industry: "Fintech",
+    });
+    expect(record.url).toBe("https://www.ycombinator.com/companies/ramp");
+    expect(record.raw.website).toBe("https://ramp.com");
+    expect(record.raw.ycUrl).toBe(
+      "https://www.ycombinator.com/companies/ramp",
+    );
+  });
 });
 
 describe("expandYcFounders", () => {
@@ -184,6 +213,20 @@ describe("expandYcFounders", () => {
     });
     expect(founders[0].raw.researchRole).toBe("yc-founder");
     expect(founders[0].raw.linkedinUrl).toContain("linkedin.com/in/");
+  });
+
+  it("links founders to company one-liner, website, and YC URL (does not drop company)", () => {
+    const company = normalizeYcCompany(ycFixture);
+    const founders = expandYcFounders(company);
+    expect(company.sourceType).toBe("yc");
+    expect(founders[0].raw).toMatchObject({
+      companyName: "Stripe",
+      companyOneLiner: "Payments infrastructure",
+      companyWebsite: "https://stripe.com",
+      companyYcUrl: "https://www.ycombinator.com/companies/stripe",
+      companyBatch: "Summer 2009",
+      companyIndustry: "Fintech",
+    });
   });
 });
 

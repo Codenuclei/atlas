@@ -3,23 +3,29 @@
   "objectID": "99",
   "name": "Stripe",
   "slug": "stripe",
+  "url": "https://www.ycombinator.com/companies/stripe",
   "website": "https://stripe.com",
   "oneLiner": "Payments infrastructure",
   "one_liner": "Payments infrastructure",
+  "longDescription": "Stripe builds economic infrastructure for the internet.",
   "location": "San Francisco, CA, USA",
   "all_locations": "San Francisco, CA, USA",
   "small_logo_thumb_url": "https://example.com/stripe.png",
   "batch": "Summer 2009",
   "industry": "Fintech",
+  "teamSize": 8000,
+  "status": "Public",
   "founders": [
     {
       "name": "Patrick Collison",
       "title": "CEO",
+      "bio": "Co-founder of Stripe; previously Auctomatic.",
       "linkedinUrl": "https://www.linkedin.com/in/patrick-collison"
     },
     {
       "name": "John Collison",
       "title": "President",
+      "bio": "Co-founder of Stripe.",
       "linkedinUrl": "https://www.linkedin.com/in/john-collison"
     }
   ]

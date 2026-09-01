@@ -260,41 +260,82 @@ export default function QueryPage() {
 
   async function streamBrief(force = false) {
     setSummary("");
+    setError("");
     setActionPending("brief");
     invalidateCache(`query:${params.id}`);
-    const response = await fetch(
-      `/api/queries/${params.id}/summary${force ? "?force=1" : ""}`,
-      { method: "POST" },
-    );
-    if (response.headers.get("content-type")?.includes("application/json")) {
-      const payload = await response.json();
-      if (payload.summary) setSummary(payload.summary);
-      setActionPending("");
-      return;
-    }
-    const reader = response.body?.getReader();
-    if (!reader) {
-      setActionPending("");
-      return;
-    }
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const chunks = buffer.split("\n\n");
-      buffer = chunks.pop() ?? "";
-      for (const chunk of chunks) {
-        const line = chunk.replace(/^data: /, "");
-        try {
-          const event = JSON.parse(line) as { delta?: string; summary?: string };
-          if (event.delta) setSummary((current) => current + event.delta);
-          if (event.summary) setSummary(event.summary);
-        } catch {
-          // keepalive lines
+    try {
+      const response = await fetch(
+        `/api/queries/${params.id}/summary${force ? "?force=1" : ""}`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        briefAutoStarted.current = false;
+        setError(
+          (payload as { message?: string }).message ??
+            `Brief generation failed (${response.status})`,
+        );
+        setActionPending("");
+        return;
+      }
+      if (response.headers.get("content-type")?.includes("application/json")) {
+        const payload = await response.json();
+        if (payload.summary) setSummary(payload.summary);
+        else {
+          briefAutoStarted.current = false;
+          setError(payload.message ?? "Brief generation returned no summary.");
+        }
+        setActionPending("");
+        return;
+      }
+      const reader = response.body?.getReader();
+      if (!reader) {
+        briefAutoStarted.current = false;
+        setError("Brief stream unavailable.");
+        setActionPending("");
+        return;
+      }
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let sawSummary = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() ?? "";
+        for (const chunk of chunks) {
+          const line = chunk.replace(/^data: /, "");
+          try {
+            const event = JSON.parse(line) as {
+              delta?: string;
+              summary?: string;
+              error?: string;
+              done?: boolean;
+            };
+            if (event.error) {
+              briefAutoStarted.current = false;
+              setError(event.error);
+              continue;
+            }
+            if (event.delta) {
+              sawSummary = true;
+              setSummary((current) => current + event.delta);
+            }
+            if (event.summary) {
+              sawSummary = true;
+              setSummary(event.summary);
+            }
+          } catch {
+            // keepalive lines
+          }
         }
       }
+      if (!sawSummary) briefAutoStarted.current = false;
+      setPollEpoch((value) => value + 1);
+    } catch (err) {
+      briefAutoStarted.current = false;
+      setError(err instanceof Error ? err.message : "Brief generation failed");
     }
     setActionPending("");
   }
@@ -559,14 +600,17 @@ export default function QueryPage() {
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={regenerateBrief}
+                onClick={() => {
+                  briefAutoStarted.current = false;
+                  void streamBrief(true);
+                }}
                 disabled={Boolean(actionPending)}
               >
                 <ArrowClockwise
                   size={13}
                   className={actionPending === "brief" ? "animate-spin" : undefined}
                 />
-                {actionPending === "brief" ? "Regenerating…" : "Regenerate brief"}
+                {actionPending === "brief" ? "Generating…" : "Regenerate brief"}
               </Button>
             ) : null}
           </div>

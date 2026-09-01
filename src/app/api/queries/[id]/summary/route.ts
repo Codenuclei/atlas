@@ -89,9 +89,13 @@ export async function POST(
             where: { id },
             data: { synthesisStartedAt: null },
           });
+          const message =
+            error && typeof error === "object" && "message" in error
+              ? String((error as { message: unknown }).message)
+              : "Summary generation failed.";
           controller.enqueue(
             encoder.encode(
-              `data: ${JSON.stringify({ error: "Summary generation failed." })}\n\n`,
+              `data: ${JSON.stringify({ error: message })}\n\n`,
             ),
           );
         } finally {

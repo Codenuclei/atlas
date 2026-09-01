@@ -45,9 +45,17 @@ export function mapAnthropicError(error: unknown): never {
     throw new AppError("UNAUTHORIZED", "Claude rejected the API key.", 401);
   }
   if (error instanceof Anthropic.APIError) {
+    const message = error.message || "Claude request failed.";
+    if (/credit balance is too low|purchase credits|billing/i.test(message)) {
+      throw new AppError(
+        "UPSTREAM",
+        "Anthropic API credits are exhausted. Add credits at console.anthropic.com (Plans & Billing), then regenerate the brief.",
+        402,
+      );
+    }
     throw new AppError(
       "UPSTREAM",
-      error.message || "Claude request failed.",
+      message,
       error.status ?? 502,
     );
   }

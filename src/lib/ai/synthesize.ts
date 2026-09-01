@@ -351,6 +351,120 @@ function contentIdeas(records: ScrapedRecord[]) {
     .slice(0, 5);
 }
 
+function fallbackYcBrief(
+  query: string,
+  records: ScrapedRecord[],
+  reason = "unknown",
+  context: SynthesisContext = {},
+): Synthesis {
+  logClaude("score_results.fallback_yc", {
+    queryId: context.queryId,
+    trigger: context.trigger,
+    reason,
+    recordCount: records.length,
+  });
+  const companies = records.filter((record) => record.sourceType === "yc");
+  const founders = records.filter(
+    (record) =>
+      record.sourceType === "profile" &&
+      (record.raw.researchRole === "yc-founder" ||
+        record.raw.source === "yc-companies"),
+  );
+  const evidence = selectYcEvidence(records, 40);
+  const companyLines = evidence
+    .filter((record) => record.sourceType === "yc")
+    .slice(0, 25)
+    .map((record) => {
+      const signal = ycSignals(record);
+      const foundersList = Array.isArray(signal.founders)
+        ? signal.founders
+            .map((founder) => {
+              const row = founder as {
+                name?: string;
+                title?: string;
+                linkedinUrl?: string;
+              };
+              return `${row.name ?? "?"}${row.title ? ` (${row.title})` : ""}${row.linkedinUrl ? ` — ${row.linkedinUrl}` : ""}`;
+            })
+            .join("; ")
+        : "";
+      return [
+        `- **${signal.name}** (${[signal.batch, signal.industry].filter(Boolean).join(", ") || "YC"})`,
+        `  What: ${signal.oneLiner || signal.subtitle || "one-liner not in evidence"}`,
+        signal.website || signal.ycUrl
+          ? `  Links: ${[signal.website, signal.ycUrl].filter(Boolean).join(" · ")}`
+          : null,
+        foundersList ? `  Founders: ${foundersList}` : "  Founder linkage: evidence missing",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    });
+
+  const batches = new Map<string, number>();
+  for (const record of companies) {
+    const batch = String(record.raw.batch ?? "Unknown");
+    batches.set(batch, (batches.get(batch) ?? 0) + 1);
+  }
+  const batchLines = [...batches.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([batch, count]) => `- ${batch}: ${count} companies`);
+
+  const founderContacts = founders
+    .filter((record) => Boolean(record.raw.linkedinUrl || record.url))
+    .slice(0, 8)
+    .map((record) => {
+      const company = String(record.raw.companyName ?? "Unknown company");
+      const title = String(record.raw.founderTitle ?? "Founder");
+      const link = String(record.raw.linkedinUrl ?? record.url ?? "");
+      return `- **${record.title}** — ${title}, ${company}${link ? ` — ${link}` : ""}`;
+    });
+
+  const billingNote = /credit|billing|402/i.test(reason)
+    ? "Claude brief generation failed because Anthropic API credits are exhausted. Add credits at console.anthropic.com, then click Regenerate brief for a full research brief."
+    : `Claude brief generation was unavailable (${reason}). This is a deterministic evidence digest — regenerate after Claude is available for the full research brief.`;
+
+  return {
+    scores: companies.slice(0, 30).map((record, index) => ({
+      externalId: record.externalId,
+      score: Math.max(0.35, 1 - index * 0.02),
+      reason: "Listed in YC evidence set for this query",
+    })),
+    summary: [
+      "COMPANIES BY INDUSTRY",
+      "",
+      `Deterministic digest for "${query}" from ${companies.length} companies and ${founders.length} founder profiles in evidence.`,
+      "",
+      ...(companyLines.length
+        ? companyLines
+        : ["- No company records in evidence."]),
+      "",
+      "BATCH SNAPSHOT",
+      "",
+      ...(batchLines.length ? batchLines : ["- No batch labels in evidence."]),
+      "",
+      "REPEATING PATTERNS",
+      "",
+      "- Pattern analysis requires Claude. Regenerate the brief once Anthropic credits are available.",
+      "",
+      "EMERGING / NEW PATTERNS",
+      "",
+      "- Emerging-pattern analysis requires Claude. See company list and batch counts above for a first pass.",
+      "",
+      "FOUNDERS TO CONTACT",
+      "",
+      ...(founderContacts.length
+        ? founderContacts
+        : ["- No founder LinkedIn URLs in evidence."]),
+      "",
+      "RESEARCH NOTES",
+      "",
+      billingNote,
+      "Product one-liners and links above come only from stored evidence fields.",
+    ].join("\n"),
+  };
+}
+
 function fallbackContentSynthesis(
   records: ScrapedRecord[],
   brandHint = "",
@@ -610,6 +724,9 @@ export async function scoreResults(
           context,
         );
       }
+      if (ycAnalysis) {
+        return fallbackYcBrief(query, records, response.stop_reason, context);
+      }
       return {
         scores: [],
         summary: "Results were collected, but Claude could not score them.",
@@ -632,6 +749,9 @@ export async function scoreResults(
         context,
       );
     }
+    if (ycAnalysis) {
+      return fallbackYcBrief(query, records, "missing_parsed_output", context);
+    }
     return { scores: [], summary: "" };
   } catch (error) {
     logClaudeError("score_results.error", error, {
@@ -642,9 +762,12 @@ export async function scoreResults(
     if (contentAnalysis) {
       return fallbackContentSynthesis(records, query, "api_error", context);
     }
+    const message = error instanceof Error ? error.message : String(error);
+    if (ycAnalysis) {
+      return fallbackYcBrief(query, records, message, context);
+    }
     // Truncated structured JSON (historically from max_tokens) should not 500
     // regenerate-brief when the parallel stream brief already succeeded.
-    const message = error instanceof Error ? error.message : String(error);
     if (/parse structured output|Unterminated string|JSON/i.test(message)) {
       return {
         scores: [],
@@ -764,6 +887,22 @@ export async function streamSummary(
       trigger: context.trigger,
       model: STREAM_MODEL,
     });
+    if (ycAnalysis) {
+      const message = error instanceof Error ? error.message : String(error);
+      const fallback = fallbackYcBrief(query, records, message, context);
+      onText(fallback.summary);
+      return fallback.summary;
+    }
+    if (contentAnalysis) {
+      const fallback = fallbackContentSynthesis(
+        records,
+        query,
+        "api_error",
+        context,
+      );
+      onText(fallback.summary);
+      return fallback.summary;
+    }
     mapAnthropicError(error);
   }
 }

@@ -38,6 +38,7 @@ import {
   invalidateCache,
   postWithHash,
   readCache,
+  writeCache,
 } from "@/lib/client-cache";
 import { DitherLoader } from "@/components/dither-loader";
 
@@ -47,6 +48,7 @@ type QueryPayload = {
   interpretation: string;
   status: string;
   summary: string | null;
+  synthesisStartedAt?: string | null;
   costEstimateUsd: number;
   createdAt: string;
   jobs: Array<{
@@ -79,6 +81,7 @@ export default function QueryPage() {
   const [copied, setCopied] = useState(false);
   const [pollEpoch, setPollEpoch] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
+  const briefAutoStarted = useRef(false);
   const collections = useCollections();
 
   useEffect(() => {
@@ -98,6 +101,17 @@ export default function QueryPage() {
       if (cached.data.query.summary) setSummary(cached.data.query.summary);
     }
 
+    async function refreshQueryFromServer() {
+      const response = await fetch(`/api/queries/${params.id}`, {
+        cache: "no-store",
+      });
+      const body = await response.json();
+      if (!response.ok || !body.query) return null;
+      const hash = body.hash || response.headers.get("x-data-hash") || "";
+      if (hash) writeCache(cacheKey, hash, body);
+      return body.query as QueryPayload;
+    }
+
     async function poll(initial = false) {
       try {
         const result = initial
@@ -110,7 +124,10 @@ export default function QueryPage() {
               `/api/queries/${params.id}`,
             );
         if (cancelled) return;
-        const next = result?.data?.query;
+        let next = result?.data?.query ?? null;
+        if (!next && !initial) {
+          next = await refreshQueryFromServer();
+        }
         if (next?.status) {
           lastStatus = reconcileQueryStatus(
             next.status,
@@ -143,6 +160,23 @@ export default function QueryPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id, pollEpoch]);
+
+  useEffect(() => {
+    if (!query) return;
+    const status = reconcileQueryStatus(
+      query.status,
+      (query.jobs ?? []).map((job) => job.status),
+    );
+    const ready =
+      isTerminalQueryStatus(status) &&
+      (query.results?.length ?? 0) > 0 &&
+      !query.summary &&
+      !query.synthesisStartedAt;
+    if (!ready || briefAutoStarted.current || actionPending === "brief") return;
+    briefAutoStarted.current = true;
+    void streamBrief();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query?.id, query?.status, query?.summary, query?.synthesisStartedAt, query?.results?.length]);
 
   useEffect(() => {
     function onClickOutside(event: MouseEvent) {
@@ -547,10 +581,10 @@ export default function QueryPage() {
               }
               body={
                 canSynthesizeBrief
-                  ? "Regenerate a brief from the collected evidence. Claude API calls are logged in the server terminal as [claude]."
+                  ? "Generating a brief from the collected evidence. This usually takes under a minute."
                   : running
-                    ? "The brief will be generated automatically once all steps finish."
-                    : "Collect evidence first, then regenerate the brief from the Brief tab."
+                    ? "Evidence appears as connector steps finish. The brief generates automatically when the run completes."
+                    : "Collect evidence first, then open the Brief tab."
               }
             />
           )}

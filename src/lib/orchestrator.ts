@@ -42,6 +42,7 @@ import {
   isOwnedBrandCreative,
 } from "@/lib/content-research";
 import { isTestMode } from "@/lib/utils";
+import { usesCohesivityPostgres } from "@/lib/cohesivity/postgres";
 import type { CohesivityDb } from "@/lib/db/cohesivity-client";
 
 function parseParams(connectorId: string, params: unknown) {
@@ -539,21 +540,66 @@ function brandHintFromQuery(query: {
     .slice(0, 80);
 }
 
+/** Fix jobs that ingested rows but never persisted itemCount (Cohesivity SQL budget/timeouts). */
+export async function repairJobItemCounts(
+  jobs: Array<{
+    id: string;
+    status: string;
+    itemCount: number;
+    input: unknown;
+    finishedAt: Date | null;
+  }>,
+): Promise<boolean> {
+  let dirty = false;
+  for (const job of jobs) {
+    if (job.status !== "succeeded" || job.itemCount > 0) continue;
+    const counted = await db.result.count({ where: { jobId: job.id } });
+    if (counted <= 0) continue;
+    const priorInput = (job.input ?? {}) as Record<string, unknown>;
+    await db.job.update({
+      where: { id: job.id },
+      data: {
+        itemCount: counted,
+        input: { ...priorInput, _ingested: true } as Prisma.InputJsonValue,
+        finishedAt: job.finishedAt ?? new Date(),
+      },
+    });
+    job.itemCount = counted;
+    dirty = true;
+  }
+  return dirty;
+}
+
 export async function ingestRecords(
   queryId: string,
   jobId: string,
   records: ScrapedRecord[],
 ) {
-  for (const record of records) {
+  if (records.length === 0) return;
+
+  const existingRows = await db.result.findMany({
+    where: { queryId },
+    select: { mergeKey: true, data: true },
+  });
+  const existingByKey = new Map<string, ScrapedRecord>(
+    existingRows.map((row) => [row.mergeKey, row.data as ScrapedRecord]),
+  );
+
+  const jobRow = await db.job.findUnique({
+    where: { id: jobId },
+    select: { input: true },
+  });
+  const priorInput = (jobRow?.input ?? {}) as Record<string, unknown>;
+  const checkpointEvery = usesCohesivityPostgres() ? 20 : records.length + 1;
+
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
     const mergeKey = mergeKeyFor(record);
-    const existing = await db.result.findUnique({
-      where: { queryId_mergeKey: { queryId, mergeKey } },
-    });
+    const existing = existingByKey.get(mergeKey);
     const next = sanitizeForSqliteJson(
-      existing
-        ? mergeRecords(existing.data as ScrapedRecord, record)
-        : record,
+      existing ? mergeRecords(existing, record) : record,
     );
+    existingByKey.set(mergeKey, next);
     await db.result.upsert({
       where: { queryId_mergeKey: { queryId, mergeKey } },
       create: {
@@ -568,8 +614,26 @@ export async function ingestRecords(
         data: next as unknown as Prisma.InputJsonValue,
         sourceType: next.sourceType,
         externalId: next.externalId,
+        jobId,
       },
     });
+
+    if ((i + 1) % checkpointEvery === 0) {
+      try {
+        await db.job.update({
+          where: { id: jobId },
+          data: {
+            itemCount: i + 1,
+            input: {
+              ...priorInput,
+              _ingested: false,
+            } as Prisma.InputJsonValue,
+          },
+        });
+      } catch (error) {
+        console.error("ingest checkpoint failed", jobId, error);
+      }
+    }
   }
 }
 
@@ -803,20 +867,8 @@ export async function syncQuery(queryId: string) {
           job.status === "succeeded" &&
           job.itemCount === 0
         ) {
-          // Repair drift: results exist but itemCount never got written (e.g. 429 mid-update).
-          const counted = await db.result.count({ where: { jobId: job.id } });
-          if (counted > 0) {
-            const priorInput = (job.input ?? {}) as Record<string, unknown>;
-            await db.job.update({
-              where: { id: job.id },
-              data: {
-                itemCount: counted,
-                input: { ...priorInput, _ingested: true } as Prisma.InputJsonValue,
-                finishedAt: job.finishedAt ?? new Date(),
-              },
-            });
-            dirty = true;
-          }
+          await repairJobItemCounts([job]);
+          dirty = true;
         }
         continue;
       }
@@ -848,61 +900,15 @@ export async function syncQuery(queryId: string) {
     where: { id: queryId },
     include: { jobs: { orderBy: { stepIndex: "asc" } }, results: true },
   });
+  if (await repairJobItemCounts(fresh.jobs)) dirty = true;
+
   const nextStatus = deriveQueryStatus(fresh.jobs.map((job) => job.status));
-  if (
-    nextStatus === "succeeded" &&
-    !fresh.summary
-  ) {
-    const claim = await db.query.updateMany({
-      where: { id: queryId, summary: null, synthesisStartedAt: null },
-      data: { synthesisStartedAt: new Date(), status: nextStatus },
-    });
-    if (claim.count > 0) {
-      dirty = true;
-      try {
-        const records = fresh.results.map((row) => row.data as ScrapedRecord);
-        const ctx = { queryId, trigger: "auto" as const };
-        const [brief, synthesis] = await Promise.all([
-          generateBrief(fresh.text, records, ctx).catch(() => ""),
-          scoreResults(fresh.text, records, ctx),
-        ]);
-        const summary =
-          brief.length > 400 ? brief : synthesis.summary;
-        for (const score of synthesis.scores) {
-          const match = fresh.results.find(
-            (row) => row.externalId === score.externalId,
-          );
-          if (match) {
-            await db.result.update({
-              where: { id: match.id },
-              data: { score: score.score },
-            });
-          }
-        }
-        await db.query.update({
-          where: { id: queryId },
-          data: { summary, status: nextStatus },
-        });
-      } catch (error) {
-        console.error("Result synthesis failed", error);
-        await db.query.update({
-          where: { id: queryId },
-          data: { synthesisStartedAt: null, status: nextStatus },
-        });
-      }
-    } else {
-      if (nextStatus !== fresh.status) dirty = true;
-      await db.query.update({
-        where: { id: queryId },
-        data: { status: nextStatus },
-      });
-    }
-  } else {
-    if (nextStatus !== fresh.status) dirty = true;
+  if (nextStatus !== fresh.status) {
     await db.query.update({
       where: { id: queryId },
       data: { status: nextStatus },
     });
+    dirty = true;
   }
 
   if (dirty) {
@@ -916,7 +922,7 @@ export async function syncQuery(queryId: string) {
 }
 
 export async function getQuery(queryId: string) {
-  const query = await db.query.findUnique({
+  let query = await db.query.findUnique({
     where: { id: queryId },
     include: {
       jobs: { orderBy: { stepIndex: "asc" } },
@@ -924,6 +930,18 @@ export async function getQuery(queryId: string) {
     },
   });
   if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
+
+  if (await repairJobItemCounts(query.jobs)) {
+    query = await db.query.findUnique({
+      where: { id: queryId },
+      include: {
+        jobs: { orderBy: { stepIndex: "asc" } },
+        results: { orderBy: { score: "desc" } },
+      },
+    });
+    if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
+  }
+
   const status = reconcileQueryStatus(
     query.status,
     query.jobs.map((job) => job.status),

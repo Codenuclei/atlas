@@ -30,6 +30,18 @@ function LaneStatus({ job }: { job: JobRow }) {
   return <StatusBadge label={status.label} tone={status.tone} />;
 }
 
+function laneItemCount(job: JobRow, jobs: JobRow[], resultCount: number) {
+  if (job.itemCount > 0) return job.itemCount;
+  if (
+    job.status === "succeeded" &&
+    jobs.length === 1 &&
+    resultCount > 0
+  ) {
+    return resultCount;
+  }
+  return 0;
+}
+
 export function RunStatus({
   jobs,
   queryStatus,
@@ -87,7 +99,9 @@ export function RunStatus({
         </div>
 
         <div className="divide-y divide-stroke rounded-md border border-stroke">
-          {jobs.map((job) => (
+          {jobs.map((job) => {
+            const laneItems = laneItemCount(job, jobs, resultCount);
+            return (
             <div key={job.id} className="flex items-center gap-3 px-3 py-2.5">
               <span
                 className={cn(
@@ -105,11 +119,12 @@ export function RunStatus({
                 {jobStageLabel(job.connectorId)}
               </span>
               <span className="tnum text-[11px] text-faint">
-                {job.itemCount > 0 ? `${job.itemCount} items` : ""}
+                {laneItems > 0 ? `${laneItems} items` : ""}
               </span>
               <LaneStatus job={job} />
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {failed.length > 0 ? (

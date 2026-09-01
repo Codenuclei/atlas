@@ -530,19 +530,7 @@ export function createCohesivityDb() {
       update: Record<string, unknown>;
     }) {
       await ready();
-      // Prefer merge-aware update when the row exists; fall back to atomic
-      // INSERT … ON CONFLICT so concurrent ingest cannot crash on the unique key.
-      const existing = await resultApi.findUnique({ where: args.where });
-      if (existing) {
-        const set = buildSetClause(args.update);
-        if (!set.sql) return existing;
-        const result = await pgQuery(
-          `UPDATE "Result" SET ${set.sql} WHERE "id" = $${set.nextIndex} RETURNING *`,
-          [...set.params, existing.id],
-        );
-        if (!result.rows[0]) notFound("Result");
-        return mapResult(result.rows[0]);
-      }
+      // One HTTP SQL round-trip per row — callers preload merge state in ingestRecords.
       const id = String(args.create.id ?? newId());
       const result = await pgQuery(
         `INSERT INTO "Result" (

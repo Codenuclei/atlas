@@ -28,11 +28,24 @@ Length: prefer dense bullets; scored summary budget raised **6000 → 12000** ch
 
 ## Files
 
-- `src/lib/ai/synthesize.ts` — prompt + schema max
+- `src/lib/ai/synthesize.ts` — prompt + schema max + model cascade
+- `src/lib/ai/yc-fallback-brief.ts` — research-quality deterministic fallback
 - `tests/unit/synthesize-brief-prompt.test.ts` — locks required phrases
+- `tests/unit/yc-fallback-brief.test.ts` — India heuristics + section coverage
 - `evals/brief-prompt-notes.md` — this note
 
 ## Follow-up (truncation)
 
 Dense briefs hit `max_tokens: 8192` on stream (`stop_reason=max_tokens`) and truncated the structured `scoreResults` JSON (`Unterminated string`). Raised `BRIEF_MAX_TOKENS` to **16384** for both score + stream (models support 128k output). Added LENGTH/COMPLETION: always finish all six section headers; RESEARCH NOTES must appear.
+
+## Robust fallback (Claude unavailable)
+
+When Claude fails (especially **credit/billing** exhaustion), briefs no longer collapse to a flat company dump. `buildYcFallbackBrief` (`src/lib/ai/yc-fallback-brief.ts`) produces the same six section headers with:
+
+- Query-relevance ranking (incl. soft India name/location heuristics — never asserted as nationality)
+- Industry grouping + why-included / founder linkage / path clauses
+- Computed repeating patterns and recent-vs-older emerging notes from evidence
+- Model cascade before fallback: stream `opus → sonnet → haiku`; score `sonnet → haiku`; **credits skip the rest** and go straight to this digest
+
+Tests: `tests/unit/yc-fallback-brief.test.ts`
 

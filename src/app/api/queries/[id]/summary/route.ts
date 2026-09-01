@@ -1,15 +1,17 @@
-import { db } from "@/lib/db";
-import { LIST_HASH_KEY, detailHashKey, touchDataHash } from "@/lib/data-hash";
-import { streamSummary } from "@/lib/ai/synthesize";
+import { persistQueryBrief } from "@/lib/orchestrator";
 import { logClaude } from "@/lib/ai/claude-log";
-import { resultRowsToRecords } from "@/lib/export";
-import { isTerminalQueryStatus, reconcileQueryStatus } from "@/lib/status";
 import { AppError, errorToResponse } from "@/lib/errors";
 import { guardMutation } from "@/lib/request-security";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
+/**
+ * Brief endpoint: DB is source of truth.
+ * - Cached summary → JSON
+ * - Otherwise claim + generate + persist, while streaming deltas over SSE
+ * Client can disconnect; persist still completes via persistQueryBrief.
+ */
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
@@ -20,83 +22,53 @@ export async function POST(
     const force =
       new URL(request.url).searchParams.get("force") === "1" ||
       new URL(request.url).searchParams.get("regenerate") === "1";
-    const query = await db.query.findUnique({
-      where: { id },
-      include: { results: true, jobs: true },
-    });
-    if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
-    const status = reconcileQueryStatus(
-      query.status,
-      query.jobs.map((job) => job.status),
-    );
-    if (!isTerminalQueryStatus(status)) {
-      throw new AppError(
-        "BAD_REQUEST",
-        "A brief can only be generated after the run finishes.",
-        400,
-      );
-    }
-    if (query.results.length === 0) {
-      throw new AppError(
-        "BAD_REQUEST",
-        "No collected results to synthesize a brief from.",
-        400,
-      );
-    }
-    if (query.summary && !force) {
-      logClaude("stream_summary.cached", { queryId: id });
-      return Response.json({ summary: query.summary, cached: true });
-    }
 
-    if (force && query.summary) {
-      await db.query.update({
-        where: { id },
-        data: { summary: null, synthesisStartedAt: null },
+    // Fast path: already persisted — no SSE needed.
+    if (!force) {
+      const cached = await persistQueryBrief(id, {
+        force: false,
+        trigger: "manual",
+      }).catch((error) => {
+        if (error instanceof AppError && error.status === 409) return null;
+        throw error;
       });
-    }
-
-    const claim = await db.query.updateMany({
-      where: { id, summary: null, synthesisStartedAt: null },
-      data: { synthesisStartedAt: new Date() },
-    });
-    if (claim.count === 0) {
-      throw new AppError(
-        "BAD_REQUEST",
-        "A brief is already being generated.",
-        409,
-      );
+      if (cached?.cached && cached.summary) {
+        logClaude("stream_summary.cached", { queryId: id });
+        return Response.json({ summary: cached.summary, cached: true });
+      }
+      if (cached && !cached.cached && cached.summary) {
+        // Background/auto just finished — return JSON (already in DB).
+        return Response.json({ summary: cached.summary, cached: false });
+      }
     }
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         const write = (delta: string) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`));
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ delta })}\n\n`),
+          );
         };
         try {
-          const summary = await streamSummary(
-            query.text,
-            resultRowsToRecords(query.results),
-            write,
-            { queryId: id, trigger: force ? "regenerate" : "manual" },
+          const result = await persistQueryBrief(id, {
+            force,
+            trigger: force ? "regenerate" : "manual",
+            onDelta: write,
+          });
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ done: true, summary: result.summary, cached: result.cached })}\n\n`,
+            ),
           );
-          await db.query.update({ where: { id }, data: { summary } });
-          await touchDataHash(LIST_HASH_KEY, detailHashKey(id));
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, summary })}\n\n`));
         } catch (error) {
           console.error("Summary stream failed", error);
-          await db.query.update({
-            where: { id },
-            data: { synthesisStartedAt: null },
-          });
           const message =
             error && typeof error === "object" && "message" in error
               ? String((error as { message: unknown }).message)
               : "Summary generation failed.";
           controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ error: message })}\n\n`,
-            ),
+            encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`),
           );
         } finally {
           controller.close();

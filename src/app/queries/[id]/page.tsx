@@ -137,8 +137,17 @@ export default function QueryPage() {
           if (next.summary) setSummary(next.summary);
           setError("");
         }
-        if (lastStatus && !isTerminalQueryStatus(lastStatus)) {
-          timer = setTimeout(() => poll(false), 5000);
+        const waitingForBrief =
+          lastStatus &&
+          isTerminalQueryStatus(lastStatus) &&
+          next &&
+          (next.results?.length ?? 0) > 0 &&
+          !next.summary;
+        if (
+          (lastStatus && !isTerminalQueryStatus(lastStatus)) ||
+          waitingForBrief
+        ) {
+          timer = setTimeout(() => poll(false), waitingForBrief ? 4000 : 5000);
         }
       } catch (err) {
         if (cancelled) return;
@@ -162,21 +171,11 @@ export default function QueryPage() {
   }, [params.id, pollEpoch]);
 
   useEffect(() => {
-    if (!query) return;
-    const status = reconcileQueryStatus(
-      query.status,
-      (query.jobs ?? []).map((job) => job.status),
-    );
-    const ready =
-      isTerminalQueryStatus(status) &&
-      (query.results?.length ?? 0) > 0 &&
-      !query.summary &&
-      !query.synthesisStartedAt;
-    if (!ready || briefAutoStarted.current || actionPending === "brief") return;
-    briefAutoStarted.current = true;
-    void streamBrief();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query?.id, query?.status, query?.summary, query?.synthesisStartedAt, query?.results?.length]);
+    // Brief is persisted server-side after results land in DB (scheduleQueryBrief).
+    // Client only streams when regenerating; otherwise poll picks up query.summary.
+    if (!query?.summary) return;
+    setSummary(query.summary);
+  }, [query?.summary]);
 
   useEffect(() => {
     function onClickOutside(event: MouseEvent) {
@@ -625,10 +624,12 @@ export default function QueryPage() {
               }
               body={
                 canSynthesizeBrief
-                  ? "Generating a brief from the collected evidence. This usually takes under a minute."
+                  ? query.synthesisStartedAt
+                    ? "Writing the brief to the database… this page will update when it lands."
+                    : "Evidence is saved. Brief is being generated on the server and will appear here when persisted."
                   : running
-                    ? "Evidence appears as connector steps finish. The brief generates automatically when the run completes."
-                    : "Collect evidence first, then open the Brief tab."
+                    ? "Evidence appears as connector steps finish. The brief is written to the database after the run completes."
+                    : "Collect evidence first, then regenerate the brief."
               }
             />
           )}

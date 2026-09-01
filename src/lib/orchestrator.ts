@@ -911,6 +911,17 @@ export async function syncQuery(queryId: string) {
     dirty = true;
   }
 
+  // Results are in DB first. Only then schedule brief persistence (async).
+  // SSE / regenerate share the same persistQueryBrief writer.
+  if (
+    nextStatus === "succeeded" &&
+    fresh.results.length > 0 &&
+    !fresh.summary &&
+    !fresh.synthesisStartedAt
+  ) {
+    scheduleQueryBrief(queryId);
+  }
+
   if (dirty) {
     await touchDataHash(LIST_HASH_KEY, detailHashKey(queryId));
   }
@@ -966,12 +977,24 @@ export async function rerunQuery(queryId: string) {
   return createQueryFromPlan(query.text, query.plan as ScrapePlan);
 }
 
-export async function regenerateBrief(queryId: string) {
+export async function persistQueryBrief(
+  queryId: string,
+  options: {
+    force?: boolean;
+    onDelta?: (delta: string) => void;
+    trigger?: "auto" | "regenerate" | "manual";
+  } = {},
+): Promise<{ summary: string; cached: boolean; scoresUpdated: number }> {
+  const force = Boolean(options.force);
+  const trigger = options.trigger ?? "auto";
+  const onDelta = options.onDelta;
+
   const query = await db.query.findUnique({
     where: { id: queryId },
     include: { results: true, jobs: { orderBy: { stepIndex: "asc" } } },
   });
   if (!query) throw new AppError("NOT_FOUND", "Query not found.", 404);
+
   const status = reconcileQueryStatus(
     query.status,
     query.jobs.map((job) => job.status),
@@ -987,63 +1010,121 @@ export async function regenerateBrief(queryId: string) {
     );
   }
 
-  logClaude("regenerate_brief.start", {
-    queryId,
-    queryStatus: query.status,
-    resultCount: query.results.length,
-    hadSummary: Boolean(query.summary),
-  });
+  if (query.summary && !force) {
+    return { summary: query.summary, cached: true, scoresUpdated: 0 };
+  }
 
-  await db.query.update({
-    where: { id: queryId },
-    data: { summary: null, synthesisStartedAt: new Date() },
+  if (force && query.summary) {
+    await db.query.update({
+      where: { id: queryId },
+      data: { summary: null, synthesisStartedAt: null },
+    });
+  }
+
+  // Another worker may already be writing the brief — wait for DB, don't race SSE.
+  if (!force && query.synthesisStartedAt && !query.summary) {
+    for (let i = 0; i < 45; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const latest = await db.query.findUnique({
+        where: { id: queryId },
+        select: { summary: true, synthesisStartedAt: true },
+      });
+      if (latest?.summary) {
+        if (onDelta) onDelta(latest.summary);
+        return { summary: latest.summary, cached: true, scoresUpdated: 0 };
+      }
+      if (!latest?.synthesisStartedAt) break;
+    }
+  }
+
+  const claim = await db.query.updateMany({
+    where: { id: queryId, summary: null, synthesisStartedAt: null },
+    data: { synthesisStartedAt: new Date() },
+  });
+  if (claim.count === 0) {
+    const latest = await db.query.findUnique({
+      where: { id: queryId },
+      select: { summary: true },
+    });
+    if (latest?.summary) {
+      return { summary: latest.summary, cached: true, scoresUpdated: 0 };
+    }
+    throw new AppError(
+      "BAD_REQUEST",
+      "A brief is already being generated.",
+      409,
+    );
+  }
+
+  logClaude("persist_brief.start", {
+    queryId,
+    trigger,
+    resultCount: query.results.length,
+    force,
   });
 
   try {
     const records = query.results.map((row) => row.data as ScrapedRecord);
-    const ctx = { queryId, trigger: "regenerate" as const };
+    const ctx = { queryId, trigger };
     const [brief, synthesis] = await Promise.all([
       generateBrief(query.text, records, ctx).catch(() => ""),
       scoreResults(query.text, records, ctx),
     ]);
-    const summary = brief.length > 400 ? brief : synthesis.summary;
+    let summary = brief.length > 400 ? brief : synthesis.summary;
+    if (!summary.trim()) {
+      summary = synthesis.summary;
+    }
+    if (onDelta && summary) onDelta(summary);
 
+    let scoresUpdated = 0;
     for (const score of synthesis.scores) {
       const match = query.results.find(
         (row) => row.externalId === score.externalId,
       );
-      if (match) {
-        await db.result.update({
-          where: { id: match.id },
-          data: { score: score.score },
-        });
-      }
+      if (!match) continue;
+      await db.result.update({
+        where: { id: match.id },
+        data: { score: score.score },
+      });
+      scoresUpdated += 1;
     }
 
+    // DB write is the source of truth — always before returning to SSE/client.
     await db.query.update({
       where: { id: queryId },
       data: { summary, synthesisStartedAt: null },
     });
-
     await touchDataHash(LIST_HASH_KEY, detailHashKey(queryId));
 
-    logClaude("regenerate_brief.done", {
+    logClaude("persist_brief.done", {
       queryId,
+      trigger,
       summaryLength: summary.length,
-      scoreCount: synthesis.scores.length,
-      usedFallback: summary.includes("Claude synthesis was unavailable"),
+      scoresUpdated,
       source: brief.length > 400 ? "stream" : "structured",
     });
 
-    return getQuery(queryId);
+    return { summary, cached: false, scoresUpdated };
   } catch (error) {
-    logClaudeError("regenerate_brief.failed", error, { queryId });
+    logClaudeError("persist_brief.failed", error, { queryId, trigger });
     await db.query.update({
       where: { id: queryId },
       data: { synthesisStartedAt: null },
     });
     throw error;
   }
+}
+
+/** Fire-and-forget brief after results are safely in DB. */
+export function scheduleQueryBrief(queryId: string) {
+  void persistQueryBrief(queryId, { trigger: "auto" }).catch((error) => {
+    console.error("scheduleQueryBrief failed", queryId, error);
+  });
+}
+
+export async function regenerateBrief(queryId: string) {
+  await persistQueryBrief(queryId, { force: true, trigger: "regenerate" });
+  return getQuery(queryId);
 }
 
 export async function retryFailedJobs(queryId: string) {

@@ -524,13 +524,35 @@ export function createCohesivityDb() {
       return result.rows[0] ? mapResult(result.rows[0]) : null;
     },
 
+    async findMany(args: {
+      where?: Record<string, unknown>;
+      select?: Record<string, boolean>;
+    } = {}) {
+      await ready();
+      const where = buildWhere(args.where ?? {});
+      const result = await pgQuery(
+        `SELECT * FROM "Result" WHERE ${where.sql}`,
+        where.params,
+      );
+      const mapped = result.rows.map(mapResult);
+      if (!args.select) return mapped;
+      return mapped.map((row) => {
+        const out: Record<string, unknown> = {};
+        for (const [key, on] of Object.entries(args.select!)) {
+          if (!on) continue;
+          if (key in row) out[key] = row[key as keyof typeof row];
+        }
+        return out;
+      });
+    },
+
     async upsert(args: {
       where: Record<string, unknown>;
       create: Record<string, unknown>;
       update: Record<string, unknown>;
     }) {
       await ready();
-      // One HTTP SQL round-trip per row — callers preload merge state in ingestRecords.
+      // One HTTP SQL round-trip per row — prefer upsertMany for bulk ingest.
       const id = String(args.create.id ?? newId());
       const result = await pgQuery(
         `INSERT INTO "Result" (
@@ -556,6 +578,64 @@ export function createCohesivityDb() {
       );
       if (!result.rows[0]) notFound("Result");
       return mapResult(result.rows[0]);
+    },
+
+    /**
+     * Multi-row INSERT … ON CONFLICT in one (or few) HTTP SQL calls.
+     * Chunks stay under payload limits; pgBatch uses a single rate-limit token.
+     */
+    async upsertMany(
+      rows: Array<{
+        queryId: string;
+        jobId: string;
+        sourceType: string;
+        externalId: string;
+        mergeKey: string;
+        score?: number | null;
+        data: unknown;
+        id?: string;
+      }>,
+    ) {
+      await ready();
+      if (!rows.length) return { count: 0 };
+      const CHUNK = 40;
+      const statements: Array<{ query: string; params: unknown[] }> = [];
+      for (let offset = 0; offset < rows.length; offset += CHUNK) {
+        const chunk = rows.slice(offset, offset + CHUNK);
+        const values: string[] = [];
+        const params: unknown[] = [];
+        let index = 1;
+        for (const row of chunk) {
+          values.push(
+            `($${index},$${index + 1},$${index + 2},$${index + 3},$${index + 4},$${index + 5},$${index + 6},$${index + 7}::jsonb)`,
+          );
+          params.push(
+            String(row.id ?? newId()),
+            row.queryId,
+            row.jobId,
+            row.sourceType,
+            row.externalId,
+            row.mergeKey,
+            row.score ?? null,
+            asJson(row.data),
+          );
+          index += 8;
+        }
+        statements.push({
+          query: `INSERT INTO "Result" (
+            "id","queryId","jobId","sourceType","externalId","mergeKey","score","data"
+          ) VALUES ${values.join(", ")}
+          ON CONFLICT ("queryId", "mergeKey") DO UPDATE SET
+            "jobId" = EXCLUDED."jobId",
+            "sourceType" = EXCLUDED."sourceType",
+            "externalId" = EXCLUDED."externalId",
+            "score" = COALESCE(EXCLUDED."score", "Result"."score"),
+            "data" = EXCLUDED."data"`,
+          params,
+        });
+      }
+      await pgBatch(statements);
+      return { count: rows.length };
     },
 
     async update(args: { where: { id: string }; data: Record<string, unknown> }) {

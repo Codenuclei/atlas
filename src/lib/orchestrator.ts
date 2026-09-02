@@ -9,10 +9,11 @@ import { logClaude, logClaudeError } from "@/lib/ai/claude-log";
 import { extractLinkedInUrls, mergeKeyFor, mergeRecords } from "@/lib/resolve";
 import {
   broadenYcCompaniesInput,
-  expandYcFounders,
   enrichYcCompaniesInput,
   ycCompaniesInputFromJobInput,
   ycCompanyNames,
+  withExpandedYcFounders,
+  ycFounderExpandCompanyLimit,
   MIN_YC_COMPANIES_BEFORE_BROADEN,
   type YcCompaniesInput,
 } from "@/lib/connectors/yc-companies";
@@ -42,7 +43,6 @@ import {
   isOwnedBrandCreative,
 } from "@/lib/content-research";
 import { clampMaxItems, isTestMode } from "@/lib/utils";
-import { usesCohesivityPostgres } from "@/lib/cohesivity/postgres";
 import type { CohesivityDb } from "@/lib/db/cohesivity-client";
 
 function parseParams(connectorId: string, params: unknown) {
@@ -591,36 +591,63 @@ export async function ingestRecords(
     existingRows.map((row) => [row.mergeKey, row.data as ScrapedRecord]),
   );
 
-  const jobRow = await db.job.findUnique({
-    where: { id: jobId },
-    select: { input: true },
-  });
-  const priorInput = (jobRow?.input ?? {}) as Record<string, unknown>;
-  const checkpointEvery = usesCohesivityPostgres() ? 20 : records.length + 1;
+  const mergedRows: Array<{
+    queryId: string;
+    jobId: string;
+    sourceType: string;
+    externalId: string;
+    mergeKey: string;
+    data: ScrapedRecord;
+  }> = [];
 
-  for (let i = 0; i < records.length; i += 1) {
-    const record = records[i];
+  for (const record of records) {
     const mergeKey = mergeKeyFor(record);
     const existing = existingByKey.get(mergeKey);
     const next = sanitizeForSqliteJson(
       existing ? mergeRecords(existing, record) : record,
     );
     existingByKey.set(mergeKey, next);
+    mergedRows.push({
+      queryId,
+      jobId,
+      sourceType: next.sourceType,
+      externalId: next.externalId,
+      mergeKey,
+      data: next,
+    });
+  }
+
+  // Cohesivity ephemeral Postgres (~18 HTTP SQL/min): one batched upsert
+  // instead of N per-row round-trips (100 companies would exhaust the budget alone).
+  if (dbProvider === "cohesivity") {
+    await (db as unknown as CohesivityDb).result.upsertMany(mergedRows);
+    return;
+  }
+
+  const jobRow = await db.job.findUnique({
+    where: { id: jobId },
+    select: { input: true },
+  });
+  const priorInput = (jobRow?.input ?? {}) as Record<string, unknown>;
+  const checkpointEvery = records.length + 1;
+
+  for (let i = 0; i < mergedRows.length; i += 1) {
+    const row = mergedRows[i];
     await db.result.upsert({
-      where: { queryId_mergeKey: { queryId, mergeKey } },
+      where: { queryId_mergeKey: { queryId, mergeKey: row.mergeKey } },
       create: {
-        queryId,
-        jobId,
-        sourceType: next.sourceType,
-        externalId: next.externalId,
-        mergeKey,
-        data: next as unknown as Prisma.InputJsonValue,
+        queryId: row.queryId,
+        jobId: row.jobId,
+        sourceType: row.sourceType,
+        externalId: row.externalId,
+        mergeKey: row.mergeKey,
+        data: row.data as unknown as Prisma.InputJsonValue,
       },
       update: {
-        data: next as unknown as Prisma.InputJsonValue,
-        sourceType: next.sourceType,
-        externalId: next.externalId,
-        jobId,
+        data: row.data as unknown as Prisma.InputJsonValue,
+        sourceType: row.sourceType,
+        externalId: row.externalId,
+        jobId: row.jobId,
       },
     });
 
@@ -712,11 +739,20 @@ async function ingestDataset(jobId: string) {
         if (queued) return;
       }
     }
-    const founders = records.flatMap((record) => expandYcFounders(record));
-    records.push(...founders);
+    // Cohesivity: skip founder Result expansion on initial ingest. Founder blobs
+    // stay on company.raw.founders; expanding 100×N profile rows blew the SQL budget
+    // and left itemCount=0 / results=0 after Apify succeeded.
+    const next = withExpandedYcFounders(
+      records,
+      ycFounderExpandCompanyLimit(dbProvider),
+    );
+    records.length = 0;
+    records.push(...next);
   }
   await ingestRecords(job.queryId, job.id, records);
   const priorInput = (job.input ?? {}) as Record<string, unknown>;
+  // Persist itemCount even when founder expansion was skipped so GET/sync
+  // see results and jobNeedsDatasetIngest stops re-ingesting.
   await db.job.update({
     where: { id: job.id },
     data: {

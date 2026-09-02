@@ -605,6 +605,32 @@ export function expandYcFounders(company: ScrapedRecord): ScrapedRecord[] {
   return out;
 }
 
+/**
+ * Cohesivity ephemeral Postgres cannot afford N founder Result rows per company
+ * during initial ingest (~18 HTTP SQL/min). Skip expansion there; founders remain
+ * on company.raw.founders. Prisma/local can expand freely.
+ */
+export function ycFounderExpandCompanyLimit(
+  provider: "cohesivity" | "prisma" | string,
+): number {
+  return provider === "cohesivity" ? 0 : Number.POSITIVE_INFINITY;
+}
+
+/** Append founder profile records for at most `companyLimit` YC companies. */
+export function withExpandedYcFounders(
+  records: ScrapedRecord[],
+  companyLimit: number,
+): ScrapedRecord[] {
+  if (!(companyLimit > 0)) return records;
+  const companies = records.filter((record) => record.sourceType === "yc");
+  const expandFrom = Number.isFinite(companyLimit)
+    ? companies.slice(0, Math.floor(companyLimit))
+    : companies;
+  const founders = expandFrom.flatMap((record) => expandYcFounders(record));
+  if (!founders.length) return records;
+  return [...records, ...founders];
+}
+
 export function ycFounderLinkedInUrls(records: ScrapedRecord[]): string[] {
   const urls = new Set<string>();
   for (const record of records) {

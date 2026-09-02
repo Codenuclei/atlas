@@ -5,6 +5,8 @@ import {
   currentYcBatch,
   normalizeYcCompany,
   expandYcFounders,
+  withExpandedYcFounders,
+  ycFounderExpandCompanyLimit,
   parseYcBatch,
   parseYcIndustry,
   prepareYcActorInput,
@@ -243,6 +245,36 @@ describe("expandYcFounders", () => {
       companyBatch: "Summer 2009",
       companyIndustry: "Fintech",
     });
+  });
+});
+
+describe("withExpandedYcFounders / cohesivity cap", () => {
+  it("skips founder Result rows when Cohesivity limit is 0", () => {
+    expect(ycFounderExpandCompanyLimit("cohesivity")).toBe(0);
+    const company = normalizeYcCompany(ycFixture);
+    const out = withExpandedYcFounders([company], 0);
+    expect(out).toHaveLength(1);
+    expect(out[0].sourceType).toBe("yc");
+  });
+
+  it("expands founders for prisma / unlimited", () => {
+    expect(ycFounderExpandCompanyLimit("prisma")).toBe(Number.POSITIVE_INFINITY);
+    const company = normalizeYcCompany(ycFixture);
+    const out = withExpandedYcFounders([company], Number.POSITIVE_INFINITY);
+    expect(out.length).toBe(1 + expandYcFounders(company).length);
+    expect(out.filter((row) => row.sourceType === "profile")).toHaveLength(2);
+  });
+
+  it("caps expansion to the first N companies", () => {
+    const a = normalizeYcCompany({ ...ycFixture, name: "A", slug: "a", objectID: "a" });
+    const b = normalizeYcCompany({ ...ycFixture, name: "B", slug: "b", objectID: "b" });
+    const out = withExpandedYcFounders([a, b], 1);
+    expect(out.filter((row) => row.sourceType === "yc")).toHaveLength(2);
+    expect(out.filter((row) => row.sourceType === "profile")).toHaveLength(2);
+    expect(out.filter((row) => row.raw.companyName === "A")).toHaveLength(2);
+    expect(out.some((row) => row.raw.companyName === "B" && row.sourceType === "profile")).toBe(
+      false,
+    );
   });
 });
 

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "ports": {"preview": 3000, "additional": {}},
+  "scripts": {
+    "setup": {
+      "enabled": true,
+      "command": "npm ci && DATABASE_URL=\"file:./dev.db\" npx prisma generate"
+    },
+    "run": {
+      "enabled": true,
+      "command": "DATABASE_URL=\"file:./dev.db\" npx prisma db push --skip-generate --accept-data-loss && SCRAPER_TEST_MODE=1 DATABASE_URL=\"file:./dev.db\" MAX_QUERY_COST_USD=5 MAX_ITEMS_CAP=100 APIFY_TOKEN=test-apify-token ANTHROPIC_API_KEY=test-anthropic-key npm run dev"
+    },
+    "archive": {"enabled": true, "command": null},
+    "check": {"enabled": true, "command": null}
+  },
+  "mcpServers": []
+}

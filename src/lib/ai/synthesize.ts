@@ -30,15 +30,15 @@ export type Synthesis = z.infer<typeof scoreSchema>;
 
 /** Cascade order for streaming briefs — try expensive first, then cheaper. */
 export const STREAM_MODELS = [
-  "claude-opus-5",
-  "claude-sonnet-5",
-  "claude-haiku-4-5",
+  "anthropic/claude-opus-5",
+  "anthropic/claude-sonnet-5",
+  "anthropic/claude-haiku-4.5",
 ] as const;
 
 /** Cascade order for structured scoring — skip opus to save cost/latency. */
 export const SCORE_MODELS = [
-  "claude-sonnet-5",
-  "claude-haiku-4-5",
+  "anthropic/claude-sonnet-5",
+  "anthropic/claude-haiku-4.5",
 ] as const;
 
 // Dense company+founder briefs (~20k chars) plus scores/JSON need headroom;

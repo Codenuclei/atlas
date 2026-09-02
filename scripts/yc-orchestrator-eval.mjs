@@ -329,11 +329,16 @@ function main() {
     process.exit(1);
   }
 
-  const hasKey =
-    (process.env.ANTHROPIC_API_KEY || "").startsWith("sk-ant-") &&
-    !(process.env.ANTHROPIC_API_KEY || "").includes("test-");
-  if (!hasKey) {
-    console.error("ANTHROPIC_API_KEY missing or placeholder — cannot run live eval");
+  const openRouterKey = process.env.OPENROUTER_API_KEY || "";
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || "";
+  const hasOpenRouter =
+    openRouterKey.startsWith("sk-or-") && !openRouterKey.includes("test-");
+  const hasAnthropic =
+    anthropicKey.startsWith("sk-ant-") && !anthropicKey.includes("test-");
+  if (!hasOpenRouter && !hasAnthropic) {
+    console.error(
+      "OPENROUTER_API_KEY (sk-or-) or ANTHROPIC_API_KEY (sk-ant-) missing or placeholder — cannot run live eval",
+    );
     process.exit(1);
   }
 

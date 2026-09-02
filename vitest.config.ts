@@ -17,6 +17,7 @@ export default defineConfig({
       MAX_ITEMS_CAP: "100",
       APIFY_TOKEN: "test-apify-token",
       ANTHROPIC_API_KEY: "test-anthropic-key",
+      OPENROUTER_API_KEY: "sk-or-v-test-placeholder-not-live",
     },
   },
   resolve: {

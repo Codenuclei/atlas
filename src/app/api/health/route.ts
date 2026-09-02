@@ -1,4 +1,4 @@
-import { hasLiveAnthropicKey } from "@/lib/ai/client";
+import { hasLiveAnthropicKey, llmProvider } from "@/lib/ai/client";
 import { usesCohesivityPostgres } from "@/lib/cohesivity/postgres";
 import { listConnectors } from "@/lib/connectors/registry";
 import { noStoreHeaders, rateLimit } from "@/lib/request-security";
@@ -14,13 +14,17 @@ export async function GET(request: Request) {
     !apifyToken.includes("test-");
 
   const database = usesCohesivityPostgres() ? "cohesivity" : "sqlite";
+  const provider = llmProvider();
+  const llmConfigured = hasLiveAnthropicKey();
 
   return Response.json(
     {
-      ok: apifyConfigured && hasLiveAnthropicKey(),
+      ok: apifyConfigured && llmConfigured,
       services: {
         apify: apifyConfigured ? "configured" : "missing",
-        claude: hasLiveAnthropicKey() ? "configured" : "missing",
+        claude: llmConfigured ? "configured" : "missing",
+        llm: provider,
+        openrouter: provider === "openrouter" ? "configured" : "missing",
         database,
       },
       connectorCount: listConnectors().length,

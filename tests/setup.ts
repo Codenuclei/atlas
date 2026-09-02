@@ -8,6 +8,7 @@ process.env.MAX_QUERY_COST_USD = "5";
 process.env.MAX_ITEMS_CAP = "100";
 process.env.APIFY_TOKEN = "test-apify-token";
 process.env.ANTHROPIC_API_KEY = "test-anthropic-key";
+process.env.OPENROUTER_API_KEY = "sk-or-v-test-placeholder-not-live";
 
 const dbPath = path.resolve(process.cwd(), "prisma/test.db");
 rmSync(dbPath, { force: true });

@@ -32,6 +32,9 @@ const EXCLUDE_FILES = new Set([".env", ".cohesivity", ".DS_Store"]);
 
 const ENV_KEYS = [
   "APIFY_TOKEN",
+  "OPENROUTER_API_KEY",
+  "OPENROUTER_MODEL",
+  "OPENROUTER_BASE_URL",
   "ANTHROPIC_API_KEY",
   "APP_ACCESS_TOKEN",
   "APP_PUBLIC_HOST",

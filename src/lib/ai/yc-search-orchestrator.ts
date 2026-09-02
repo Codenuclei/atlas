@@ -18,7 +18,8 @@ import {
 import { AppError } from "@/lib/errors";
 import { isTestMode } from "@/lib/utils";
 
-const ORCHESTRATOR_MODEL = "claude-sonnet-5";
+const ORCHESTRATOR_MODEL =
+  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-5";
 const MAX_TOOL_ROUNDS = 8;
 
 const finalizeSchema = z.object({
@@ -529,7 +530,7 @@ export async function orchestrateYcSearch(
   if (!hasLiveAnthropicKey()) {
     throw new AppError(
       "UNAUTHORIZED",
-      "ANTHROPIC_API_KEY is required to build YC search filters. Heuristic query building is disabled.",
+      "OPENROUTER_API_KEY or ANTHROPIC_API_KEY is required to build YC search filters. Heuristic query building is disabled.",
       401,
     );
   }

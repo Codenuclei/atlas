@@ -13,7 +13,8 @@ import { AppError } from "@/lib/errors";
 import { isTestMode, maxQueryCostUsd } from "@/lib/utils";
 import { estimatePlanCost } from "@/lib/ai/cost";
 
-const PLANNER_MODEL = "claude-sonnet-5";
+const PLANNER_MODEL =
+  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-5";
 
 export function capabilitySystemPrompt() {
   return [
@@ -277,7 +278,7 @@ export async function createPlanWithSource(query: string): Promise<PlannedQuery>
   if (!hasLiveAnthropicKey()) {
     throw new AppError(
       "UNAUTHORIZED",
-      "ANTHROPIC_API_KEY is required. Heuristic planning is disabled outside test mode.",
+      "OPENROUTER_API_KEY or ANTHROPIC_API_KEY is required. Heuristic planning is disabled outside test mode.",
       401,
     );
   }

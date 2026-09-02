@@ -27,8 +27,11 @@ export function maxQueryCostUsd() {
 
 export function clampMaxItems(value: unknown, fallback = 25) {
   const n = typeof value === "number" ? value : Number(value);
-  const safe = Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
-  return Math.min(safe, maxItemsCap());
+  const fb =
+    Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : 25;
+  const safe = Number.isFinite(n) && n > 0 ? Math.floor(n) : fb;
+  // Always >= 1 — Apify PPR rejects "Maximum charged results must be greater than zero".
+  return Math.max(1, Math.min(safe, maxItemsCap()));
 }
 
 export function asStringArray(value: unknown): string[] {

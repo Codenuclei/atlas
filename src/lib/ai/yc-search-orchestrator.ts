@@ -19,7 +19,7 @@ import { AppError } from "@/lib/errors";
 import { isTestMode } from "@/lib/utils";
 
 const ORCHESTRATOR_MODEL =
-  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-5";
+  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-4";
 const MAX_TOOL_ROUNDS = 8;
 
 const finalizeSchema = z.object({
@@ -199,7 +199,10 @@ function draftFromArgs(args: Record<string, unknown>): YcCompaniesInput {
     industry: typeof args.industry === "string" ? args.industry : undefined,
     tags: Array.isArray(args.tags) ? args.tags.map(String) : undefined,
     isHiring: typeof args.isHiring === "boolean" ? args.isHiring : undefined,
-    maxItems: typeof args.maxItems === "number" ? args.maxItems : 100,
+    maxItems:
+      typeof args.maxItems === "number" && args.maxItems > 0
+        ? Math.floor(args.maxItems)
+        : 100,
   };
 }
 
@@ -334,7 +337,10 @@ function runTool(name: string, input: unknown): unknown {
         industry,
         tags,
         isHiring: parsed.data.isHiring ?? false,
-        maxItems: parsed.data.maxItems ?? 100,
+        maxItems:
+          typeof parsed.data.maxItems === "number" && parsed.data.maxItems > 0
+            ? parsed.data.maxItems
+            : 100,
       };
       if ((draft.query?.split(/\s+/).filter(Boolean).length ?? 0) > 4) {
         return {
@@ -406,9 +412,10 @@ function systemPrompt(mode: "initial" | "broaden") {
     "  tags:[\"Education\"] + industries:[]               →  DIFFERENT Algolia field than industry",
     "",
     "INFERENCE RULES",
-    "1. Category / industry language (\"category education\", \"education companies\", \"edtech\", \"fintech startups\")",
+    "1. Category / industry language (\"category education\", \"education companies\", \"edtech\", \"learning\", \"teaching\", \"schools\", \"fintech startups\")",
     "   → ONE industries[] value. tags=[] . query=\"\". batches=[] unless time was also asked.",
-    "   Education is a valid industry on this actor — prefer industries:[\"Education\"], NOT tags:[\"Education\"].",
+    "   Education is a valid industry on this actor — ALWAYS prefer industries:[\"Education\"], NEVER tags:[\"Education\"] alone.",
+    "   Single-word topical asks like \"learning\" / \"edtech\" map to industry Education with empty tags and empty query.",
     "2. Time language:",
     "   - Named calendar year (\"2025\", \"all of 2025\", \"four seasons of 2025\", \"YC 2025\") → list_yc_batches_for_year(2025)",
     "     → batches exactly [\"Winter 2025\",\"Spring 2025\",\"Summer 2025\",\"Fall 2025\"]. Never put \"2025\" in query.",
@@ -419,7 +426,7 @@ function systemPrompt(mode: "initial" | "broaden") {
     "   → industry + tags for DIFFERENT concepts. Never industry Education + tag Education. Never add tags:[\"AI\"] unless AI was asked.",
     "4. Hiring (\"hiring\", \"open roles\") → isHiring:true. Otherwise false.",
     "5. Free-text query → empty by default. Only add ≤3 words when they ADD a facet industry/tags cannot express. Brand analogies (\"Stripe-like\", \"Uber for X\", \"competitors of …\") → map to industry (e.g. Fintech) and leave query=\"\" — never invent \"payments\" / brand names / competitor phrases in query. Never pitches, Scope lines, years, or \"YC companies\".",
-    "6. maxItems → default 100. Lower only if the user asks for fewer.",
+    "6. maxItems → default 100. NEVER 0 or negative. Lower only if the user asks for fewer (still >= 1).",
     "7. If Scope: conflicts with the main ask on time, prefer the main ask.",
     "",
     "TOOL WORKFLOW",
@@ -441,6 +448,11 @@ function systemPrompt(mode: "initial" | "broaden") {
     "APIFY:",
     '{"query":"","batches":[],"industries":["Education"],"regions":[],"statuses":[],"tags":[],"isHiring":false,"topCompaniesOnly":false,"slugs":[],"maxResults":100,"fullDetails":true,"extractIndustry":true,"extractBatch":true,"extractLocation":true,"extractTeamSize":true,"extractStatus":true,"extractSocials":true,"extractTags":true,"extractFounders":true,"extractLongDescription":true,"extractLogo":true,"maxConcurrency":5,"timeout":30}',
     "LIVE: filters='(industries:\"Education\")' → many hits (capped by maxResults).",
+    "",
+    "Example 1b — topical synonym (NOT a tag)",
+    "USER: learning / edtech / teaching startups",
+    "FINALIZE: {\"industry\":\"Education\",\"tags\":[],\"query\":\"\",\"isHiring\":false,\"maxItems\":100,\"rationale\":\"Education industry for learning/edtech ask.\"}",
+    "BAD: tags:[\"Education\"] with empty industry — that is a different Algolia field and fails grade checks.",
     "",
     "Example 2 — four seasons of calendar 2025 (LIVE TESTED)",
     "USER: YC companies from 2025 / all four seasons of 2025",
@@ -487,7 +499,8 @@ function systemPrompt(mode: "initial" | "broaden") {
     "ALWAYS call finalize_yc_search once — never end without it. If the ask over-ANDs many facets (industry+AI+climate+B2B+hiring+many seasons), pick a constrained useful subset: primary industry, at most one orthogonal tag if clearly asked, explicit seasons OR a relative window (not both piled on), hiring only if asked. Drop extras rather than refusing or looping.",
     "",
     "OUTPUT CONTRACT",
-    "Call finalize_yc_search once. rationale = one sentence about the filters.",
+    "You MUST call finalize_yc_search exactly once before stopping. Ending without finalize is a hard failure.",
+    "rationale = one sentence about the filters.",
   ];
 
   if (mode === "broaden") {

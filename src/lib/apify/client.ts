@@ -84,9 +84,9 @@ function createLiveApify(): ApifyProvider {
   return {
     async startActor(actorId, input, options) {
       try {
-        // Never pass a tiny maxItems-derived platform charge — Apify PPE actors
-        // fail with "Maximum cost per run is less than the allowed minimum of $0.10".
-        // Limit via actor input.maxItems / maxResults instead; keep a high charge ceiling.
+        // Pass platform maxItems (>=1) for pay-per-result actors; keep a high
+        // maxTotalChargeUsd ceiling for pay-per-event actors. Result caps also
+        // live in actor input (maxItems / maxResults).
         const startOptions: Record<string, unknown> = {};
         if (options?.timeout != null) startOptions.timeout = options.timeout;
         if (options?.memory != null) startOptions.memory = options.memory;
@@ -94,7 +94,17 @@ function createLiveApify(): ApifyProvider {
         startOptions.maxTotalChargeUsd =
           options?.maxTotalChargeUsd ??
           (Number.isFinite(ceiling) && ceiling > 0 ? Math.max(ceiling, 1) : 50);
-        // Intentionally omit options.maxItems so Apify does not derive a sub-$0.10 charge.
+        // Pay-per-result actors require platform maxItems > 0 ("Maximum charged results…").
+        // Prefer the connector's prepared cap; never send 0.
+        const charged =
+          options?.maxItems != null && options.maxItems > 0
+            ? Math.floor(options.maxItems)
+            : typeof input.maxResults === "number" && input.maxResults > 0
+              ? Math.floor(input.maxResults)
+              : typeof input.maxItems === "number" && input.maxItems > 0
+                ? Math.floor(input.maxItems)
+                : 100;
+        startOptions.maxItems = Math.max(1, charged);
         return (await client.actor(actorId).start(input, startOptions)) as ActorRunLike;
       } catch (error) {
         mapApifyError(error);

@@ -262,12 +262,18 @@ export function ycCompaniesInputFromJobInput(
   const industryFromActor = Array.isArray(input.industries)
     ? String(input.industries[0] ?? "").trim()
     : "";
-  const maxFromActor =
+  const rawMax =
     typeof input.maxResults === "number"
       ? input.maxResults
       : typeof input.maxItems === "number"
         ? input.maxItems
         : undefined;
+  const maxFromActor =
+    rawMax == null
+      ? undefined
+      : rawMax > 0
+        ? clampMaxItems(rawMax, 100)
+        : 100;
   const connectorBatches =
     Array.isArray(input.batches) &&
     !("fullDetails" in input || "maxResults" in input || "extractFounders" in input)
@@ -405,7 +411,8 @@ export function prepareYcActorInput(input: YcCompaniesInput) {
   const filteredTags = (input.tags ?? []).filter(
     (tag) => tag.toLowerCase() !== input.industry?.toLowerCase(),
   );
-  // Actor default / docs example is 100; 0 = all matching.
+  // Actor docs once treated 0 as "all", but Apify PPR now rejects charged results <= 0.
+  // Always send maxResults >= 1 (default 100).
   const maxItems = clampMaxItems(input.maxItems, 100);
   const query = (input.query ?? "").trim();
   const safeQuery =

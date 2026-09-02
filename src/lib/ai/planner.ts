@@ -10,11 +10,11 @@ import {
 } from "@/lib/connectors/yc-companies";
 import { refineYcPlanWithOrchestrator } from "@/lib/ai/yc-search-orchestrator";
 import { AppError } from "@/lib/errors";
-import { isTestMode, maxQueryCostUsd } from "@/lib/utils";
+import { clampMaxItems, isTestMode, maxQueryCostUsd } from "@/lib/utils";
 import { estimatePlanCost } from "@/lib/ai/cost";
 
 const PLANNER_MODEL =
-  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-5";
+  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-4";
 
 export function capabilitySystemPrompt() {
   return [
@@ -45,7 +45,7 @@ export function capabilitySystemPrompt() {
     "LIMITS",
     "Hard maximum maxItems per step: 100.",
     "LinkedIn search/jobs: keep maxItems between 10 and 25 unless the user explicitly requests fewer.",
-    "yc-companies: default maxItems to 100 unless the user requests fewer.",
+    "yc-companies: default maxItems to 100 unless the user requests fewer. Never set maxItems to 0.",
     "Avoid combinatorial LinkedIn jobs plans — maxItems applies to every title × location pair.",
     "",
     "YC COMPANIES (yc-companies)",
@@ -166,6 +166,13 @@ export function validatePlan(plan: ScrapePlan): ScrapePlan {
       );
     }
     step.params = result.data as Record<string, unknown>;
+    if ("maxItems" in step.params || connector.id === "yc-companies") {
+      const raw = step.params.maxItems;
+      step.params.maxItems = clampMaxItems(
+        typeof raw === "number" || typeof raw === "string" ? raw : undefined,
+        connector.id === "yc-companies" ? 100 : 25,
+      );
+    }
     step.connectorId = connector.id;
     if (step.dependsOn.some((dependency) => !seen.has(dependency))) {
       throw new AppError(

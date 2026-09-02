@@ -26,6 +26,22 @@ describe("YC actor id", () => {
 });
 
 describe("prepareYcActorInput", () => {
+  it("defaults maxResults to 100 when maxItems is missing", () => {
+    expect(prepareYcActorInput({ industry: "Education" }).maxResults).toBe(100);
+  });
+
+  it("clamps maxItems 0 / negative to >= 1 (default 100)", () => {
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 0 }).maxResults).toBe(100);
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: -5 }).maxResults).toBe(100);
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 50 }).maxResults).toBe(50);
+  });
+
+  it("buildRun never exposes platform maxItems below 1", () => {
+    const run = ycCompaniesConnector.buildRun({ industry: "Education", maxItems: 0 });
+    expect(run.maxItems).toBeGreaterThanOrEqual(1);
+    expect((run.input as { maxResults: number }).maxResults).toBeGreaterThanOrEqual(1);
+  });
+
   it("matches the live Apify actor input shape for Education-only search", () => {
     const input = prepareYcActorInput({
       query: "",

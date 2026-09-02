@@ -41,7 +41,7 @@ import {
   deriveInstagramExampleHashtags,
   isOwnedBrandCreative,
 } from "@/lib/content-research";
-import { isTestMode } from "@/lib/utils";
+import { clampMaxItems, isTestMode } from "@/lib/utils";
 import { usesCohesivityPostgres } from "@/lib/cohesivity/postgres";
 import type { CohesivityDb } from "@/lib/db/cohesivity-client";
 
@@ -283,7 +283,7 @@ async function startJob(jobId: string): Promise<boolean> {
           industry: meta.industry,
           tags: meta.tags,
           isHiring: meta.isHiring,
-          maxItems: meta.maxItems,
+          maxItems: clampMaxItems(meta.maxItems, 100),
           _orchestrated: true,
           ...(meta._broadenAttempt
             ? { _broadenAttempt: meta._broadenAttempt, _notice: meta._notice }
@@ -354,11 +354,17 @@ async function startJob(jobId: string): Promise<boolean> {
     });
     return true;
   }
+    const platformMaxItems = Math.max(
+      1,
+      prepared.maxItems ??
+        (typeof (prepared.input as Record<string, unknown>).maxResults === "number"
+          ? ((prepared.input as Record<string, unknown>).maxResults as number)
+          : 100),
+    );
     const run = await getApify().startActor(
       prepared.actorId!,
       prepared.input,
-      // Do not pass maxItems here — Apify derives a sub-$0.10 charge and rejects PPE actors.
-      // Result caps live in prepared.input (maxItems / maxResults).
+      { maxItems: platformMaxItems },
     );
     const storedInput =
       connector.id === "yc-companies" && ycMeta
@@ -741,7 +747,7 @@ async function queueYcBroadenRetry(
     industry: current.industry,
     tags: current.tags,
     isHiring: current.isHiring,
-    maxItems: current.maxItems,
+    maxItems: clampMaxItems(current.maxItems, 100),
   };
 
   let next: YcCompaniesInput | null = null;

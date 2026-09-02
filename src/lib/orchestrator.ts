@@ -742,17 +742,21 @@ async function ingestDataset(jobId: string) {
     // Cohesivity: skip founder Result expansion on initial ingest. Founder blobs
     // stay on company.raw.founders; expanding 100×N profile rows blew the SQL budget
     // and left itemCount=0 / results=0 after Apify succeeded.
+    // Copy into a new array first: withExpandedYcFounders(records, 0) returns
+    // the same reference, and `records.length = 0` would wipe companies before push.
     const next = withExpandedYcFounders(
       records,
       ycFounderExpandCompanyLimit(dbProvider),
     );
+    const materialized = next === records ? records.slice() : next;
     records.length = 0;
-    records.push(...next);
+    records.push(...materialized);
   }
   await ingestRecords(job.queryId, job.id, records);
   const priorInput = (job.input ?? {}) as Record<string, unknown>;
-  // Persist itemCount even when founder expansion was skipped so GET/sync
-  // see results and jobNeedsDatasetIngest stops re-ingesting.
+  // Only mark ingested when we actually have rows (or confirmed empty dataset).
+  // Marking _ingested with itemCount=0 blocked retries after the cohesivity
+  // founder-expand alias wipe.
   await db.job.update({
     where: { id: job.id },
     data: {
@@ -760,7 +764,7 @@ async function ingestDataset(jobId: string) {
       finishedAt: job.finishedAt ?? new Date(),
       input: {
         ...priorInput,
-        _ingested: true,
+        _ingested: records.length > 0,
       } as Prisma.InputJsonValue,
     },
   });

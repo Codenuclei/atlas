@@ -621,7 +621,8 @@ export function withExpandedYcFounders(
   records: ScrapedRecord[],
   companyLimit: number,
 ): ScrapedRecord[] {
-  if (!(companyLimit > 0)) return records;
+  // Always return a new array so callers can safely clear/replace `records`.
+  if (!(companyLimit > 0)) return records.slice();
   const companies = records.filter((record) => record.sourceType === "yc");
   const expandFrom = Number.isFinite(companyLimit)
     ? companies.slice(0, Math.floor(companyLimit))

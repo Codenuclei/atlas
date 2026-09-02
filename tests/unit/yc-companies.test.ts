@@ -257,6 +257,15 @@ describe("withExpandedYcFounders / cohesivity cap", () => {
     expect(out[0].sourceType).toBe("yc");
   });
 
+  it("returns a new array at limit 0 so callers can clear the input safely", () => {
+    const company = normalizeYcCompany(ycFixture);
+    const input = [company];
+    const out = withExpandedYcFounders(input, 0);
+    expect(out).not.toBe(input);
+    input.length = 0;
+    expect(out).toHaveLength(1);
+  });
+
   it("expands founders for prisma / unlimited", () => {
     expect(ycFounderExpandCompanyLimit("prisma")).toBe(Number.POSITIVE_INFINITY);
     const company = normalizeYcCompany(ycFixture);

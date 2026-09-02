@@ -45,6 +45,7 @@ export type ApifyProvider = {
 function mapApifyError(error: unknown): never {
   if (error instanceof ApifyApiError) {
     const status = error.statusCode ?? 500;
+    const message = error.message || "Apify request failed.";
     if (status === 401) {
       throw new AppError("UNAUTHORIZED", "Apify rejected the API token.", 401);
     }
@@ -58,7 +59,21 @@ function mapApifyError(error: unknown): never {
         429,
       );
     }
-    throw new AppError("UPSTREAM", error.message || "Apify request failed.", status, {
+    // Near-zero Apify balance often surfaces as "Maximum charged results must be
+    // greater than zero" (computed allowance = 0) or an explicit usage exceed.
+    if (
+      /exceed your remaining usage|monthly usage|purchase credits|upgrade to a paid plan|Maximum charged results must be greater than zero/i.test(
+        message,
+      )
+    ) {
+      throw new AppError(
+        "UPSTREAM",
+        "Apify usage/credits are exhausted (or too low to charge any results). Top up or upgrade at https://console.apify.com/billing/subscription, then retry the scrape.",
+        status >= 400 ? status : 402,
+        { type: error.type, upstream: message },
+      );
+    }
+    throw new AppError("UPSTREAM", message, status, {
       type: error.type,
     });
   }

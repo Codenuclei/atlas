@@ -30,13 +30,13 @@ export type Synthesis = z.infer<typeof scoreSchema>;
 
 /** Cascade order for streaming briefs — reliable sonnet first, haiku fallback. */
 export const STREAM_MODELS = [
-  "anthropic/claude-sonnet-4",
+  "anthropic/claude-sonnet-5",
   "anthropic/claude-haiku-4.5",
 ] as const;
 
 /** Cascade order for structured scoring — sonnet first, haiku fallback. */
 export const SCORE_MODELS = [
-  "anthropic/claude-sonnet-4",
+  "anthropic/claude-sonnet-5",
   "anthropic/claude-haiku-4.5",
 ] as const;
 

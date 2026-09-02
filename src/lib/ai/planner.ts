@@ -14,7 +14,7 @@ import { clampMaxItems, isTestMode, maxQueryCostUsd } from "@/lib/utils";
 import { estimatePlanCost } from "@/lib/ai/cost";
 
 const PLANNER_MODEL =
-  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-4";
+  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-5";
 
 export function capabilitySystemPrompt() {
   return [
@@ -257,6 +257,15 @@ async function requestPlan(query: string, extra?: string): Promise<ScrapePlan> {
     return response.parsed_output;
   } catch (error) {
     if (error instanceof AppError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    // OpenRouter models that ignore output_config often return prose/fenced JSON.
+    if (/Failed to parse structured output/i.test(message)) {
+      throw new AppError(
+        "PLAN_INVALID",
+        "Claude returned a non-JSON scrape plan. Try again or shorten the query.",
+        400,
+      );
+    }
     mapAnthropicError(error);
   }
 }

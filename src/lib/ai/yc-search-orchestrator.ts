@@ -19,7 +19,7 @@ import { AppError } from "@/lib/errors";
 import { isTestMode } from "@/lib/utils";
 
 const ORCHESTRATOR_MODEL =
-  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-4";
+  process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-5";
 const MAX_TOOL_ROUNDS = 8;
 
 const finalizeSchema = z.object({

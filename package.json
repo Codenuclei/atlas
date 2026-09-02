@@ -24,7 +24,6 @@
     "@prisma/client": "^6.14.0",
     "apify-client": "latest",
     "clsx": "latest",
-    "lucide-react": "latest",
     "next": "latest",
     "prisma": "^6.14.0",
     "react": "latest",

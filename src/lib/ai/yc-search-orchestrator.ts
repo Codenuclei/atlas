@@ -16,7 +16,12 @@ import {
   type YcCompaniesInput,
 } from "@/lib/connectors/yc-companies";
 import { AppError } from "@/lib/errors";
-import { isTestMode } from "@/lib/utils";
+import {
+  clampMaxItems,
+  DEFAULT_MAX_ITEMS,
+  YC_ACTOR_MAX_RECORDS,
+  isTestMode,
+} from "@/lib/utils";
 
 const ORCHESTRATOR_MODEL =
   process.env.OPENROUTER_MODEL?.trim() || "anthropic/claude-sonnet-5";
@@ -29,7 +34,7 @@ const finalizeSchema = z.object({
   industry: z.string().max(64).optional().nullable(),
   tags: z.array(z.string().max(64)).max(8).optional().nullable(),
   isHiring: z.boolean().optional().nullable(),
-  maxItems: z.number().int().min(1).max(100).optional().nullable(),
+  maxItems: z.number().int().min(1).max(YC_ACTOR_MAX_RECORDS).optional().nullable(),
   rationale: z.string().max(400),
 });
 
@@ -199,10 +204,7 @@ function draftFromArgs(args: Record<string, unknown>): YcCompaniesInput {
     industry: typeof args.industry === "string" ? args.industry : undefined,
     tags: Array.isArray(args.tags) ? args.tags.map(String) : undefined,
     isHiring: typeof args.isHiring === "boolean" ? args.isHiring : undefined,
-    maxItems:
-      typeof args.maxItems === "number" && args.maxItems > 0
-        ? Math.floor(args.maxItems)
-        : 100,
+    maxItems: clampMaxItems(args.maxItems, DEFAULT_MAX_ITEMS),
   };
 }
 
@@ -337,10 +339,7 @@ function runTool(name: string, input: unknown): unknown {
         industry,
         tags,
         isHiring: parsed.data.isHiring ?? false,
-        maxItems:
-          typeof parsed.data.maxItems === "number" && parsed.data.maxItems > 0
-            ? parsed.data.maxItems
-            : 100,
+        maxItems: clampMaxItems(parsed.data.maxItems, DEFAULT_MAX_ITEMS),
       };
       if ((draft.query?.split(/\s+/).filter(Boolean).length ?? 0) > 4) {
         return {
@@ -425,7 +424,7 @@ function systemPrompt(mode: "initial" | "broaden") {
     "   → industry + tags for DIFFERENT concepts. Never industry Education + tag Education. Never add tags:[\"AI\"] unless AI was asked.",
     "4. Hiring (\"hiring\", \"open roles\") → isHiring:true. Otherwise false.",
     "5. Free-text query → empty by default. Only add ≤3 words when they ADD a facet industry/tags cannot express. Brand analogies (\"Stripe-like\", \"Uber for X\", \"competitors of …\") → map to industry (e.g. Fintech) and leave query=\"\" — never invent \"payments\" / brand names / competitor phrases in query. Never pitches, Scope lines, years, or \"YC companies\".",
-    "6. maxItems → default 100. NEVER 0 or negative. Lower only if the user asks for fewer (still >= 1).",
+    "6. maxItems → default 500 (platform cap; actor Algolia ceiling 1000). NEVER 0 or negative. Lower only if the user asks for fewer (still >= 1).",
     "7. If Scope: conflicts with the main ask on time, prefer the main ask.",
     "",
     "TOOL WORKFLOW",

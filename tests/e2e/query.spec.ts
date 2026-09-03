@@ -11,6 +11,7 @@ test("user can interpret a query, run it, and export CSV", async ({ page }) => {
   await expect(page).toHaveURL(/\/queries\//);
   await expect(page.getByText("yc-companies")).toBeVisible();
   await page.getByRole("button", { name: /Evidence/ }).click();
+  await expect(page.getByText("Company").first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Ramp").first()).toBeVisible({ timeout: 15_000 });
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: /Export all/ }).click();

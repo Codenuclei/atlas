@@ -181,6 +181,12 @@ export function isContentConnector(connectorId: string): boolean {
   return platformOfConnector(connectorId) !== "other";
 }
 
+/** True when every job step is yc-companies (YC-only research run). */
+export function isYcOnlyQuery(jobs: Array<{ connectorId: string }>): boolean {
+  if (!jobs.length) return false;
+  return jobs.every((job) => job.connectorId === "yc-companies");
+}
+
 export type WorkspaceTab = "creatives" | "brief" | "evidence";
 
 /** Landing tab: creatives only when the run is actually a social-content search. */

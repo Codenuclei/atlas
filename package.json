@@ -29,6 +29,8 @@
     "prisma": "^6.14.0",
     "react": "latest",
     "react-dom": "latest",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "latest",
     "zod": "latest"
   },

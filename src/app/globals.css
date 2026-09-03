@@ -664,15 +664,29 @@ select:focus-visible {
   line-height: 1.65;
   color: var(--text-secondary);
 }
+.brief-body h1,
+.brief-body h2,
 .brief-body h3 {
   font-family: var(--font-instrument), "Iowan Old Style", Georgia, serif;
   font-style: italic;
   color: var(--text-primary);
   font-weight: 400;
-  font-size: 21px;
   letter-spacing: -0.01em;
   margin-top: 30px;
   margin-bottom: 8px;
+}
+.brief-body h1 {
+  font-size: 24px;
+}
+.brief-body h2 {
+  font-size: 22px;
+}
+.brief-body h3 {
+  font-size: 21px;
+}
+.brief-body strong {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 .brief-body p {
   margin-bottom: 12px;

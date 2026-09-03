@@ -21,7 +21,9 @@ import { GrokBot, type BotMood } from "@/components/grok-bot";
 import { RunStatus } from "@/components/run-status";
 import { CreativesBoard, boardRecordsFrom } from "@/components/creatives-board";
 import { EvidenceTable } from "@/components/evidence-table";
+import { YcEvidenceTable } from "@/components/yc-evidence-table";
 import { Brief } from "@/components/brief";
+import { ServiceAlertBanner } from "@/components/service-alert";
 import { EmptyState } from "@/components/ui";
 import { resultRowsToRecords } from "@/lib/export";
 import { isTerminalQueryStatus, reconcileQueryStatus } from "@/lib/status";
@@ -30,8 +32,13 @@ import {
   displayStatus,
   isContentConnector,
   isContentRecord,
+  isYcOnlyQuery,
   type WorkspaceTab,
 } from "@/lib/view-model";
+import {
+  classifyServiceAlerts,
+  genericServiceAlert,
+} from "@/lib/service-alert";
 import { useCollections } from "@/lib/collections";
 import {
   fetchWithHash,
@@ -73,7 +80,8 @@ export default function QueryPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [query, setQuery] = useState<QueryPayload | null>(null);
-  const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [briefError, setBriefError] = useState("");
   const [summary, setSummary] = useState("");
   const [actionPending, setActionPending] = useState("");
   const [activeTab, setActiveTab] = useState<Tab | null>(null);
@@ -135,7 +143,7 @@ export default function QueryPage() {
           );
           setQuery(next);
           if (next.summary) setSummary(next.summary);
-          setError("");
+          setLoadError("");
         }
         const waitingForBrief =
           lastStatus &&
@@ -158,7 +166,7 @@ export default function QueryPage() {
           timer = setTimeout(() => poll(false), 12000);
           return;
         }
-        setError(message);
+        setLoadError(message);
       }
     }
 
@@ -252,14 +260,14 @@ export default function QueryPage() {
       setSummary(payload.query.summary ?? "");
       setPollEpoch((value) => value + 1);
     } else {
-      setError(payload.message ?? "Could not regenerate brief");
+      setBriefError(payload.message ?? "Could not regenerate brief");
     }
     setActionPending("");
   }
 
   async function streamBrief(force = false) {
     setSummary("");
-    setError("");
+    setBriefError("");
     setActionPending("brief");
     invalidateCache(`query:${params.id}`);
     try {
@@ -270,7 +278,7 @@ export default function QueryPage() {
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         briefAutoStarted.current = false;
-        setError(
+        setBriefError(
           (payload as { message?: string }).message ??
             `Brief generation failed (${response.status})`,
         );
@@ -282,7 +290,7 @@ export default function QueryPage() {
         if (payload.summary) setSummary(payload.summary);
         else {
           briefAutoStarted.current = false;
-          setError(payload.message ?? "Brief generation returned no summary.");
+          setBriefError(payload.message ?? "Brief generation returned no summary.");
         }
         setActionPending("");
         return;
@@ -290,7 +298,7 @@ export default function QueryPage() {
       const reader = response.body?.getReader();
       if (!reader) {
         briefAutoStarted.current = false;
-        setError("Brief stream unavailable.");
+        setBriefError("Brief stream unavailable.");
         setActionPending("");
         return;
       }
@@ -314,7 +322,7 @@ export default function QueryPage() {
             };
             if (event.error) {
               briefAutoStarted.current = false;
-              setError(event.error);
+              setBriefError(event.error);
               continue;
             }
             if (event.delta) {
@@ -334,7 +342,7 @@ export default function QueryPage() {
       setPollEpoch((value) => value + 1);
     } catch (err) {
       briefAutoStarted.current = false;
-      setError(err instanceof Error ? err.message : "Brief generation failed");
+      setBriefError(err instanceof Error ? err.message : "Brief generation failed");
     }
     setActionPending("");
   }
@@ -351,7 +359,7 @@ export default function QueryPage() {
       setSummary("");
       setPollEpoch((value) => value + 1);
     } else {
-      setError(payload.message ?? "Could not retry failed steps");
+      setBriefError(payload.message ?? "Could not retry failed steps");
     }
     setActionPending("");
   }
@@ -363,7 +371,7 @@ export default function QueryPage() {
     });
     const payload = await response.json();
     if (response.ok) router.push(`/queries/${payload.query.id}`);
-    else setError(payload.message ?? "Could not rerun query");
+    else setBriefError(payload.message ?? "Could not rerun query");
     setActionPending("");
   }
 
@@ -387,17 +395,26 @@ export default function QueryPage() {
     window.setTimeout(() => setCopied(false), 1600);
   }
 
-  if (error) {
-    return (
-      <div className="rounded-lg border border-danger/30 bg-danger-muted p-5 text-[13px] text-danger">
-        {error}
-      </div>
-    );
-  }
-
   if (!query) {
+    if (loadError) {
+      return (
+        <div className="rounded-lg border border-danger/30 bg-danger-muted p-5 text-[13px] text-danger">
+          {loadError}
+        </div>
+      );
+    }
     return <DitherLoader label="Loading run" className="mt-10" />;
   }
+
+  const ycOnly = isYcOnlyQuery(query.jobs ?? []);
+  const serviceAlerts = classifyServiceAlerts([
+    briefError,
+    ...failedJobs.map((job) => job.error ?? ""),
+  ]);
+  const fallbackAlert =
+    briefError && serviceAlerts.length === 0
+      ? [genericServiceAlert(briefError)]
+      : [];
 
   const status = displayStatus(
     effectiveStatus,
@@ -542,6 +559,8 @@ export default function QueryPage() {
         </div>
       </div>
 
+      <ServiceAlertBanner alerts={[...serviceAlerts, ...fallbackAlert]} />
+
       {running || effectiveStatus !== "succeeded" ? (
         <RunStatus
           jobs={query.jobs ?? []}
@@ -646,6 +665,8 @@ export default function QueryPage() {
                 : "Rows appear as connector steps finish. Failed steps stay visible in the run summary above."
             }
           />
+        ) : ycOnly ? (
+          <YcEvidenceTable items={boardItems} queryId={query.id} />
         ) : (
           <EvidenceTable items={boardItems} queryId={query.id} />
         )

@@ -119,4 +119,15 @@ describe("progressive brief scheduling", () => {
     expect(second).toHaveLength(50);
     expect(second[0].title).toBe("Co51");
   });
+
+  it("does not schedule while final verify is pending or complete", () => {
+    expect(
+      shouldScheduleProgressivePass(100, {
+        passes: [],
+        accumulatedSummary: "draft",
+        lastPassCompanyCount: 50,
+        finalVerified: true,
+      }),
+    ).toBe(false);
+  });
 });

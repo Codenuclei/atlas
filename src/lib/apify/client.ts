@@ -101,7 +101,7 @@ function createLiveApify(): ApifyProvider {
       try {
         // Pass platform maxItems (>=1) for pay-per-result actors; keep a high
         // maxTotalChargeUsd ceiling for pay-per-event actors. Result caps also
-        // live in actor input (maxItems / maxResults).
+        // live in actor input (maxItems / maxResults / maxRecords).
         const startOptions: Record<string, unknown> = {};
         if (options?.timeout != null) startOptions.timeout = options.timeout;
         if (options?.memory != null) startOptions.memory = options.memory;
@@ -114,11 +114,13 @@ function createLiveApify(): ApifyProvider {
         const charged =
           options?.maxItems != null && options.maxItems > 0
             ? Math.floor(options.maxItems)
-            : typeof input.maxResults === "number" && input.maxResults > 0
-              ? Math.floor(input.maxResults)
-              : typeof input.maxItems === "number" && input.maxItems > 0
-                ? Math.floor(input.maxItems)
-                : 100;
+            : typeof input.maxRecords === "number" && input.maxRecords > 0
+              ? Math.floor(input.maxRecords)
+              : typeof input.maxResults === "number" && input.maxResults > 0
+                ? Math.floor(input.maxResults)
+                : typeof input.maxItems === "number" && input.maxItems > 0
+                  ? Math.floor(input.maxItems)
+                  : 100;
         startOptions.maxItems = Math.max(1, charged);
         return (await client.actor(actorId).start(input, startOptions)) as ActorRunLike;
       } catch (error) {

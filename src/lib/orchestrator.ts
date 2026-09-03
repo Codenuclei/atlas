@@ -354,12 +354,16 @@ async function startJob(jobId: string): Promise<boolean> {
     });
     return true;
   }
+    const inputRec = prepared.input as Record<string, unknown>;
+    const fromInput =
+      typeof inputRec.maxRecords === "number"
+        ? inputRec.maxRecords
+        : typeof inputRec.maxResults === "number"
+          ? inputRec.maxResults
+          : 100;
     const platformMaxItems = Math.max(
       1,
-      prepared.maxItems ??
-        (typeof (prepared.input as Record<string, unknown>).maxResults === "number"
-          ? ((prepared.input as Record<string, unknown>).maxResults as number)
-          : 100),
+      prepared.maxItems ?? fromInput,
     );
     const run = await getApify().startActor(
       prepared.actorId!,

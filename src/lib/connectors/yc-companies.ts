@@ -18,8 +18,12 @@ export const ycCompaniesSchema = z.object({
 
 export type YcCompaniesInput = z.infer<typeof ycCompaniesSchema>;
 
-/** Apify actor with founders + LinkedIn (fullDetails / extractFounders). */
-export const YC_ACTOR_ID = "apivault_labs/yc-companies-scraper";
+/**
+ * Direct-Algolia YC directory actor (no HTML bootstrap of rotating keys).
+ * Prefer over apivault_labs/yc-companies-scraper which 403s on /companies.
+ * Algolia list fields only — founders/LinkedIn are usually absent.
+ */
+export const YC_ACTOR_ID = "haketa/ycombinator-companies-scraper";
 
 const STOP_WORDS =
   /\b(yc|y combinator|ycombinator|companies|company|startups?|startup|hiring|hire|hired|looking|find|show|list|get|the|and|for|with|that|who|went|through|from|into|in|on|at|of|to|a|an|current|latest|batch|batches|winter|summer|spring|fall|founders?|linkedin|scope|combinator|research|researched|analyze|analys(?:is|e|ing)|compare|comparing|market|markets|growth|roles?|exact|matching|return|creatives?|please|help|me|us|our|their)\b/gi;
@@ -263,20 +267,27 @@ export function ycCompaniesInputFromJobInput(
     ? String(input.industries[0] ?? "").trim()
     : "";
   const rawMax =
-    typeof input.maxResults === "number"
-      ? input.maxResults
-      : typeof input.maxItems === "number"
-        ? input.maxItems
-        : undefined;
+    typeof input.maxRecords === "number"
+      ? input.maxRecords
+      : typeof input.maxResults === "number"
+        ? input.maxResults
+        : typeof input.maxItems === "number"
+          ? input.maxItems
+          : undefined;
   const maxFromActor =
     rawMax == null
       ? undefined
       : rawMax > 0
         ? clampMaxItems(rawMax, 100)
         : 100;
+  const looksLikeActorInput =
+    "maxRecords" in input ||
+    "hiringOnly" in input ||
+    "fullDetails" in input ||
+    "maxResults" in input ||
+    "extractFounders" in input;
   const connectorBatches =
-    Array.isArray(input.batches) &&
-    !("fullDetails" in input || "maxResults" in input || "extractFounders" in input)
+    Array.isArray(input.batches) && !looksLikeActorInput
       ? input.batches.map(String).filter(Boolean)
       : [];
   const batches =
@@ -284,6 +295,12 @@ export function ycCompaniesInputFromJobInput(
       ? connectorBatches
       : batchesFromActor.length > 0
         ? batchesFromActor
+        : undefined;
+  const hiring =
+    typeof input.isHiring === "boolean"
+      ? input.isHiring
+      : typeof input.hiringOnly === "boolean"
+        ? input.hiringOnly
         : undefined;
   return {
     query: typeof input.query === "string" ? input.query : undefined,
@@ -299,7 +316,7 @@ export function ycCompaniesInputFromJobInput(
     tags: Array.isArray(input.tags)
       ? input.tags.map(String).filter(Boolean)
       : undefined,
-    isHiring: typeof input.isHiring === "boolean" ? input.isHiring : undefined,
+    isHiring: hiring,
     maxItems: maxFromActor,
     _orchestrated: input._orchestrated === true,
     _broadenAttempt:
@@ -396,10 +413,9 @@ export function broadenYcCompaniesInput(
 export const MIN_YC_COMPANIES_BEFORE_BROADEN = 5;
 
 /**
- * Convert orchestrator filters into the exact Apify actor input object.
- * Shape must match apivault_labs/yc-companies-scraper input schema —
- * missing fields or wrong stacking changes the Algolia filters and returns
- * the wrong companies (live: industries:["Education"] → filters='(industries:"Education")').
+ * Convert orchestrator filters into haketa/ycombinator-companies-scraper input.
+ * Direct Algolia — no HTML key bootstrap. Haketa has no `tags` facet; topical
+ * tags fold into `query` when free-text is otherwise empty.
  */
 export function prepareYcActorInput(input: YcCompaniesInput) {
   const batches =
@@ -411,37 +427,29 @@ export function prepareYcActorInput(input: YcCompaniesInput) {
   const filteredTags = (input.tags ?? []).filter(
     (tag) => tag.toLowerCase() !== input.industry?.toLowerCase(),
   );
-  // Actor docs once treated 0 as "all", but Apify PPR now rejects charged results <= 0.
-  // Always send maxResults >= 1 (default 100).
+  // Always send maxRecords >= 1 (default 100).
   const maxItems = clampMaxItems(input.maxItems, 100);
   const query = (input.query ?? "").trim();
-  const safeQuery =
+  let safeQuery =
     query.split(/\s+/).filter(Boolean).length > 4 ? "" : query;
+  // Prefer directory facets; only keep short topical free-text.
+  // Haketa ignores a tags[] field — fold the first orthogonal tag into query.
+  if (!safeQuery && filteredTags.length) {
+    safeQuery = filteredTags[0];
+  }
 
   return {
     query: safeQuery,
     batches,
+    statuses: [] as string[],
     industries: input.industry ? [input.industry] : [],
     regions: [] as string[],
-    statuses: [] as string[],
-    tags: filteredTags,
-    isHiring: Boolean(input.isHiring),
+    stages: [] as string[],
+    hiringOnly: Boolean(input.isHiring),
     topCompaniesOnly: false,
-    slugs: [] as string[],
-    maxResults: maxItems,
-    fullDetails: true,
-    extractIndustry: true,
-    extractBatch: true,
-    extractLocation: true,
-    extractTeamSize: true,
-    extractStatus: true,
-    extractSocials: true,
-    extractTags: true,
-    extractFounders: true,
-    extractLongDescription: true,
-    extractLogo: true,
-    maxConcurrency: 5,
-    timeout: 30,
+    maxRecords: maxItems,
+    hitsPerPage: 1000,
+    requestDelay: 300,
   };
 }
 
@@ -522,7 +530,14 @@ export function normalizeYcCompany(raw: Record<string, unknown>): ScrapedRecord 
     title: firstText(raw.name) || "YC company",
     subtitle: meta.subtitle || meta.oneLiner || meta.industry,
     url: primaryUrl,
-    location: firstText(raw.location, raw.city, raw.country, raw.all_locations),
+    location: firstText(
+      raw.location,
+      raw.city,
+      raw.country,
+      raw.all_locations,
+      raw.allLocations,
+      Array.isArray(raw.regions) ? String(raw.regions[0] ?? "") : "",
+    ),
     imageUrl: firstText(raw.logoUrl, raw.small_logo_thumb_url, raw.logo),
     raw: {
       ...raw,
@@ -675,16 +690,16 @@ export const ycCompaniesConnector: Connector<YcCompaniesInput> = {
   sourceType: "yc",
   kind: "search",
   actorId: YC_ACTOR_ID,
-  usdPerThousand: 5,
+  usdPerThousand: 2.5,
   capability:
-    "Search YC companies via Apify actor apivault_labs/yc-companies-scraper with fullDetails + extractFounders. Draft params lightly (maxItems ~50, isHiring if obvious). Leave batch window, industry, tags, and short query for the YC tool orchestrator — do not invent season lists or industry/tag mappings here. Never put the full user sentence or Scope lines in query. Founders with LinkedIn URLs come back on each company — do not add linkedin-profile-search unless the user asks for deeper LinkedIn-only research.",
+    "Search YC companies via Apify actor haketa/ycombinator-companies-scraper (direct Algolia). Draft params lightly (maxItems ~50, isHiring if obvious). Leave batch window, industry, tags, and short query for the YC tool orchestrator — do not invent season lists or industry/tag mappings here. Never put the full user sentence or Scope lines in query. Prefer empty query with industries/batches; orthogonal tags (e.g. AI) fold into query. Directory rows include website/batch/industry — founder LinkedIn enrichment is not guaranteed on this actor.",
   inputSchema: ycCompaniesSchema,
   buildRun(input) {
     const actorInput = prepareYcActorInput(input);
     return {
       executor: "apify",
       actorId: YC_ACTOR_ID,
-      maxItems: actorInput.maxResults,
+      maxItems: actorInput.maxRecords,
       input: actorInput,
     };
   },
@@ -696,13 +711,12 @@ export const ycCompaniesConnector: Connector<YcCompaniesInput> = {
     const filterBits = [
       actorInput.batches[0],
       actorInput.industries[0],
-      actorInput.tags[0],
       actorInput.query ? `q="${actorInput.query}"` : null,
     ].filter(Boolean);
     return {
-      usd: (actorInput.maxResults / 1000) * 5,
-      itemCount: actorInput.maxResults,
-      note: `YC via Apify · ${filterBits.join(" · ") || "all"}${actorInput.isHiring ? " · hiring only" : ""} · founders+socials`,
+      usd: (actorInput.maxRecords / 1000) * 2.5,
+      itemCount: actorInput.maxRecords,
+      note: `YC via Apify (Algolia) · ${filterBits.join(" · ") || "all"}${actorInput.hiringOnly ? " · hiring only" : ""}`,
     };
   },
 };

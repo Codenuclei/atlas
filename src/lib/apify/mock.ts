@@ -8,7 +8,12 @@ type MockRun = ActorRunLike & {
 const runs = new Map<string, MockRun>();
 
 function sampleItems(actorId: string, input: Record<string, unknown>) {
-  if (actorId.includes("apivault") || actorId.includes("yc-companies")) {
+  if (
+    actorId.includes("apivault") ||
+    actorId.includes("haketa") ||
+    actorId.includes("ycombinator-companies") ||
+    actorId.includes("yc-companies")
+  ) {
     return [
       {
         id: 1,

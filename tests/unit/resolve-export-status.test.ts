@@ -132,13 +132,11 @@ describe("YC Apify connector", () => {
       maxItems: 25,
     });
     expect(run.executor).toBe("apify");
-    expect(run.actorId).toBe("apivault_labs/yc-companies-scraper");
+    expect(run.actorId).toBe("haketa/ycombinator-companies-scraper");
     expect(run.input).toMatchObject({
       query: "fintech",
-      isHiring: true,
-      maxResults: 25,
-      fullDetails: true,
-      extractFounders: true,
+      hiringOnly: true,
+      maxRecords: 25,
     });
   });
 
@@ -154,11 +152,10 @@ describe("YC Apify connector", () => {
     });
     expect(run.input).toMatchObject({
       query: "",
-      isHiring: true,
+      hiringOnly: true,
       industries: ["Fintech"],
       batches: ["Winter 2024"],
-      maxResults: 50,
-      extractFounders: true,
+      maxRecords: 50,
     });
   });
 });

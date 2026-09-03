@@ -20,32 +20,32 @@ import {
 import ycFixture from "../fixtures/yc-company.json";
 
 describe("YC actor id", () => {
-  it("uses apivault_labs/yc-companies-scraper", () => {
-    expect(YC_ACTOR_ID).toBe("apivault_labs/yc-companies-scraper");
+  it("uses haketa/ycombinator-companies-scraper", () => {
+    expect(YC_ACTOR_ID).toBe("haketa/ycombinator-companies-scraper");
     expect(ycCompaniesConnector.actorId).toBe(
-      "apivault_labs/yc-companies-scraper",
+      "haketa/ycombinator-companies-scraper",
     );
   });
 });
 
 describe("prepareYcActorInput", () => {
-  it("defaults maxResults to 100 when maxItems is missing", () => {
-    expect(prepareYcActorInput({ industry: "Education" }).maxResults).toBe(100);
+  it("defaults maxRecords to 100 when maxItems is missing", () => {
+    expect(prepareYcActorInput({ industry: "Education" }).maxRecords).toBe(100);
   });
 
   it("clamps maxItems 0 / negative to >= 1 (default 100)", () => {
-    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 0 }).maxResults).toBe(100);
-    expect(prepareYcActorInput({ industry: "Fintech", maxItems: -5 }).maxResults).toBe(100);
-    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 50 }).maxResults).toBe(50);
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 0 }).maxRecords).toBe(100);
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: -5 }).maxRecords).toBe(100);
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 50 }).maxRecords).toBe(50);
   });
 
   it("buildRun never exposes platform maxItems below 1", () => {
     const run = ycCompaniesConnector.buildRun({ industry: "Education", maxItems: 0 });
     expect(run.maxItems).toBeGreaterThanOrEqual(1);
-    expect((run.input as { maxResults: number }).maxResults).toBeGreaterThanOrEqual(1);
+    expect((run.input as { maxRecords: number }).maxRecords).toBeGreaterThanOrEqual(1);
   });
 
-  it("matches the live Apify actor input shape for Education-only search", () => {
+  it("matches the live haketa actor input shape for Education-only search", () => {
     const input = prepareYcActorInput({
       query: "",
       industry: "Education",
@@ -59,25 +59,15 @@ describe("prepareYcActorInput", () => {
       industries: ["Education"],
       regions: [],
       statuses: [],
-      tags: [],
-      isHiring: false,
+      stages: [],
+      hiringOnly: false,
       topCompaniesOnly: false,
-      slugs: [],
-      maxResults: 100,
-      fullDetails: true,
-      extractIndustry: true,
-      extractBatch: true,
-      extractFounders: true,
-      extractTags: true,
-      extractLongDescription: true,
-      extractLocation: true,
-      extractTeamSize: true,
-      extractStatus: true,
-      extractSocials: true,
-      extractLogo: true,
-      maxConcurrency: 5,
-      timeout: 30,
+      maxRecords: 100,
+      hitsPerPage: 1000,
+      requestDelay: 300,
     });
+    expect(input).not.toHaveProperty("fullDetails");
+    expect(input).not.toHaveProperty("tags");
   });
 
   it("maps AI-orchestrated filters into the Apify payload", () => {
@@ -90,15 +80,13 @@ describe("prepareYcActorInput", () => {
       maxItems: 100,
       _orchestrated: true,
     });
-    expect(input.fullDetails).toBe(true);
-    expect(input.extractFounders).toBe(true);
     expect(input.batches).toEqual(["Summer 2026", "Spring 2026"]);
     expect(input.industries).toEqual(["Education"]);
-    expect(input.tags).toEqual(["AI"]);
-    expect(input.query).toBe("");
-    expect(input.maxResults).toBe(100);
+    // Haketa has no tags facet — orthogonal AI tag folds into query.
+    expect(input.query).toBe("AI");
+    expect(input.maxRecords).toBe(100);
+    expect(input.hiringOnly).toBe(false);
     expect(input.topCompaniesOnly).toBe(false);
-    expect(input.maxConcurrency).toBe(5);
   });
 
   it("clears sentence-length free-text instead of sending pitches to Apify", () => {
@@ -158,9 +146,8 @@ describe("ycKeywordsFrom / season helpers used by AI tools", () => {
       "Fall 2025",
     ]);
     expect(input.industries).toEqual(["Education"]);
-    expect(input.tags).toEqual([]);
     expect(input.query).toBe("");
-    expect(input.maxResults).toBe(100);
+    expect(input.maxRecords).toBe(100);
   });
 
   it("maps a months lookback into seasons without hardcoding year windows", () => {

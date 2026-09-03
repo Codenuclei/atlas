@@ -4,6 +4,7 @@ import {
   broadenYcCompaniesInput,
   currentYcBatch,
   normalizeYcCompany,
+  COHESIVITY_YC_FOUNDER_EXPAND_COMPANY_LIMIT,
   expandYcFounders,
   withExpandedYcFounders,
   ycFounderExpandCompanyLimit,
@@ -249,12 +250,21 @@ describe("expandYcFounders", () => {
 });
 
 describe("withExpandedYcFounders / cohesivity cap", () => {
-  it("skips founder Result rows when Cohesivity limit is 0", () => {
-    expect(ycFounderExpandCompanyLimit("cohesivity")).toBe(0);
+  it("expands founders for a capped company count on Cohesivity", () => {
+    expect(ycFounderExpandCompanyLimit("cohesivity")).toBe(
+      COHESIVITY_YC_FOUNDER_EXPAND_COMPANY_LIMIT,
+    );
+    expect(COHESIVITY_YC_FOUNDER_EXPAND_COMPANY_LIMIT).toBeGreaterThan(0);
+    expect(COHESIVITY_YC_FOUNDER_EXPAND_COMPANY_LIMIT).toBeLessThanOrEqual(100);
     const company = normalizeYcCompany(ycFixture);
-    const out = withExpandedYcFounders([company], 0);
-    expect(out).toHaveLength(1);
-    expect(out[0].sourceType).toBe("yc");
+    const out = withExpandedYcFounders(
+      [company],
+      ycFounderExpandCompanyLimit("cohesivity"),
+    );
+    expect(out.filter((row) => row.sourceType === "yc")).toHaveLength(1);
+    expect(out.filter((row) => row.sourceType === "profile")).toHaveLength(2);
+    expect(out[1].raw.linkedinUrl).toContain("linkedin.com/in/");
+    expect(out[1].url).toContain("linkedin.com/in/");
   });
 
   it("returns a new array at limit 0 so callers can clear the input safely", () => {

@@ -739,9 +739,9 @@ async function ingestDataset(jobId: string) {
         if (queued) return;
       }
     }
-    // Cohesivity: skip founder Result expansion on initial ingest. Founder blobs
-    // stay on company.raw.founders; expanding 100×N profile rows blew the SQL budget
-    // and left itemCount=0 / results=0 after Apify succeeded.
+    // Cohesivity: expand founders for a capped company count (see
+    // ycFounderExpandCompanyLimit). Batched upsertMany keeps SQL budget OK;
+    // remaining founders stay nested on company.raw.founders.
     // Copy into a new array first: withExpandedYcFounders(records, 0) returns
     // the same reference, and `records.length = 0` would wipe companies before push.
     const next = withExpandedYcFounders(

@@ -606,14 +606,19 @@ export function expandYcFounders(company: ScrapedRecord): ScrapedRecord[] {
 }
 
 /**
- * Cohesivity ephemeral Postgres cannot afford N founder Result rows per company
- * during initial ingest (~18 HTTP SQL/min). Skip expansion there; founders remain
- * on company.raw.founders. Prisma/local can expand freely.
+ * How many YC companies may emit founder profile Result rows at ingest.
+ * Cohesivity uses batched upsertMany (one SQL budget token), so a modest
+ * company cap is safe (~2 founders each → ~100 profile rows at 50).
+ * Prisma/local expands freely. Founders beyond the cap stay on company.raw.founders.
  */
+export const COHESIVITY_YC_FOUNDER_EXPAND_COMPANY_LIMIT = 50;
+
 export function ycFounderExpandCompanyLimit(
   provider: "cohesivity" | "prisma" | string,
 ): number {
-  return provider === "cohesivity" ? 0 : Number.POSITIVE_INFINITY;
+  return provider === "cohesivity"
+    ? COHESIVITY_YC_FOUNDER_EXPAND_COMPANY_LIMIT
+    : Number.POSITIVE_INFINITY;
 }
 
 /** Append founder profile records for at most `companyLimit` YC companies. */

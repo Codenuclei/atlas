@@ -2,7 +2,7 @@
 
 import { Warning, WarningCircle } from "@phosphor-icons/react";
 import { cn } from "@/components/ui";
-import type { ServiceAlert } from "@/lib/service-alert";
+import type { ServiceAlert } from "@/lib/service-errors";
 
 export function ServiceAlertBanner({ alerts }: { alerts: ServiceAlert[] }) {
   if (!alerts.length) return null;

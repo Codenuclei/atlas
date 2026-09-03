@@ -19,7 +19,7 @@ import { AppError } from "@/lib/errors";
 import {
   clampMaxItems,
   DEFAULT_MAX_ITEMS,
-  YC_ACTOR_MAX_RECORDS,
+  maxItemsCap,
   isTestMode,
 } from "@/lib/utils";
 
@@ -34,7 +34,7 @@ const finalizeSchema = z.object({
   industry: z.string().max(64).optional().nullable(),
   tags: z.array(z.string().max(64)).max(8).optional().nullable(),
   isHiring: z.boolean().optional().nullable(),
-  maxItems: z.number().int().min(1).max(YC_ACTOR_MAX_RECORDS).optional().nullable(),
+  maxItems: z.number().int().min(1).max(maxItemsCap()).optional().nullable(),
   rationale: z.string().max(400),
 });
 

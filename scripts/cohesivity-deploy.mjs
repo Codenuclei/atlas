@@ -54,6 +54,7 @@ const DEFAULT_ENV = {
   SCRAPER_TEST_MODE: "0",
   NODE_ENV: "production",
   MAX_QUERY_COST_USD: "0",
+  MAX_ITEMS_CAP: "500",
 };
 
 function loadDotEnv(path) {

@@ -38,7 +38,8 @@ import {
 import {
   classifyServiceAlerts,
   genericServiceAlert,
-} from "@/lib/service-alert";
+} from "@/lib/service-errors";
+import { parseProgressiveBriefState } from "@/lib/ai/progressive-brief";
 import { useCollections } from "@/lib/collections";
 import {
   fetchWithHash,
@@ -58,6 +59,7 @@ type QueryPayload = {
   synthesisStartedAt?: string | null;
   costEstimateUsd: number;
   createdAt: string;
+  progressiveBrief?: unknown;
   jobs: Array<{
     id: string;
     connectorId: string;
@@ -407,6 +409,14 @@ export default function QueryPage() {
   }
 
   const ycOnly = isYcOnlyQuery(query.jobs ?? []);
+  const progressiveBrief = parseProgressiveBriefState(query.progressiveBrief);
+  const progressiveMeta = progressiveBrief
+    ? {
+        passNumber: progressiveBrief.passes.length || 1,
+        itemCount: progressiveBrief.lastPassCompanyCount,
+        inProgress: progressiveBrief.inProgress,
+      }
+    : null;
   const serviceAlerts = classifyServiceAlerts([
     briefError,
     ...failedJobs.map((job) => job.error ?? ""),
@@ -633,7 +643,11 @@ export default function QueryPage() {
             ) : null}
           </div>
           {summary ? (
-            <Brief summary={summary} streaming={actionPending === "brief"} />
+            <Brief
+              summary={summary}
+              streaming={actionPending === "brief"}
+              progressiveMeta={progressiveMeta}
+            />
           ) : (
             <EmptyState
               title={

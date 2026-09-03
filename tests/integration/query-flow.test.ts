@@ -13,6 +13,18 @@ afterEach(async () => {
   await db.query.deleteMany();
 });
 
+async function waitForSummary(queryId: string, attempts = 20) {
+  for (let i = 0; i < attempts; i += 1) {
+    const row = await db.query.findUnique({
+      where: { id: queryId },
+      select: { summary: true },
+    });
+    if (row?.summary) return row.summary;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return null;
+}
+
 describe("query flow", () => {
   it("runs a YC query to completion and stores results", async () => {
     const plan = heuristicPlan("YC companies hiring in fintech");
@@ -20,7 +32,7 @@ describe("query flow", () => {
     const synced = await syncQuery(created.id);
     expect(synced.status).toBe("succeeded");
     expect(synced.results.length).toBeGreaterThan(0);
-    expect(synced.summary).toBeTruthy();
+    expect(await waitForSummary(created.id)).toBeTruthy();
   });
 
   it("runs a two-step search-then-people plan", async () => {
@@ -43,7 +55,7 @@ describe("query flow", () => {
       "Analyze Example Brand across YouTube and Instagram",
       plan,
     );
-    const synced = await syncQuery(created.id);
+    let synced = await syncQuery(created.id);
     expect(synced.status).toBe("succeeded");
     expect(synced.results.map((result) => result.sourceType).sort()).toEqual([
       "instagram",
@@ -55,6 +67,12 @@ describe("query flow", () => {
       "youtube",
       "youtube",
     ]);
+    if (!synced.summary) {
+      synced = {
+        ...synced,
+        summary: await waitForSummary(created.id),
+      };
+    }
     expect(synced.summary).toContain("Found 8 results");
     expect(
       (synced.jobs[2].input as { searchQueries?: string[] }).searchQueries,

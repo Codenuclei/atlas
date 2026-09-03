@@ -17,6 +17,7 @@ import {
   ycCompaniesConnector,
   ycKeywordsFrom,
 } from "@/lib/connectors/yc-companies";
+import { DEFAULT_MAX_ITEMS } from "@/lib/utils";
 import ycFixture from "../fixtures/yc-company.json";
 
 describe("YC actor id", () => {
@@ -29,13 +30,19 @@ describe("YC actor id", () => {
 });
 
 describe("prepareYcActorInput", () => {
-  it("defaults maxRecords to 100 when maxItems is missing", () => {
-    expect(prepareYcActorInput({ industry: "Education" }).maxRecords).toBe(100);
+  it("defaults maxRecords to DEFAULT_MAX_ITEMS when maxItems is missing", () => {
+    expect(prepareYcActorInput({ industry: "Education" }).maxRecords).toBe(
+      DEFAULT_MAX_ITEMS,
+    );
   });
 
-  it("clamps maxItems 0 / negative to >= 1 (default 100)", () => {
-    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 0 }).maxRecords).toBe(100);
-    expect(prepareYcActorInput({ industry: "Fintech", maxItems: -5 }).maxRecords).toBe(100);
+  it("clamps maxItems 0 / negative to >= 1 (default DEFAULT_MAX_ITEMS)", () => {
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: 0 }).maxRecords).toBe(
+      DEFAULT_MAX_ITEMS,
+    );
+    expect(prepareYcActorInput({ industry: "Fintech", maxItems: -5 }).maxRecords).toBe(
+      DEFAULT_MAX_ITEMS,
+    );
     expect(prepareYcActorInput({ industry: "Fintech", maxItems: 50 }).maxRecords).toBe(50);
   });
 

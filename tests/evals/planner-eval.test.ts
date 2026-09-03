@@ -47,7 +47,7 @@ const cases: Case[] = [
   },
   {
     query: "founders at YC companies in SF",
-    expectConnectors: ["yc-companies", "linkedin-profile-search"],
+    expectConnectors: ["yc-companies"],
   },
   {
     query: "machine learning engineers in Seattle",

@@ -39,6 +39,7 @@ function mapQuery(row: PgRow) {
     plan: parseJson(row.plan),
     status: String(row.status),
     summary: row.summary == null ? null : String(row.summary),
+    progressiveBrief: parseJson(row.progressiveBrief),
     synthesisStartedAt: asDate(row.synthesisStartedAt),
     costEstimateUsd: Number(row.costEstimateUsd),
     createdAt: asDate(row.createdAt) ?? new Date(0),
@@ -149,7 +150,7 @@ function buildSetClause(
   let index = startIndex;
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined) continue;
-    if (key === "plan" || key === "input" || key === "data") {
+    if (key === "plan" || key === "input" || key === "data" || key === "progressiveBrief") {
       parts.push(`"${key}" = $${index}::jsonb`);
       params.push(asJson(value));
     } else if (value instanceof Date) {
@@ -230,8 +231,8 @@ export function createCohesivityDb() {
       const statements = [
         {
           query: `INSERT INTO "Query" (
-            "id","text","interpretation","plan","status","summary","synthesisStartedAt","costEstimateUsd","createdAt","updatedAt"
-          ) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10)`,
+            "id","text","interpretation","plan","status","summary","progressiveBrief","synthesisStartedAt","costEstimateUsd","createdAt","updatedAt"
+          ) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb,$8,$9,$10,$11)`,
           params: [
             id,
             args.data.text,
@@ -239,6 +240,7 @@ export function createCohesivityDb() {
             asJson(args.data.plan),
             args.data.status,
             args.data.summary ?? null,
+            asJson(args.data.progressiveBrief ?? null),
             args.data.synthesisStartedAt
               ? new Date(String(args.data.synthesisStartedAt)).toISOString()
               : null,

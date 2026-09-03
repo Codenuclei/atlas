@@ -46,6 +46,7 @@ const SCHEMA_STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS "Result_queryId_mergeKey_key" ON "Result"("queryId", "mergeKey")`,
   `CREATE INDEX IF NOT EXISTS "Result_queryId_sourceType_idx" ON "Result"("queryId", "sourceType")`,
   `CREATE INDEX IF NOT EXISTS "DataHash_hash_idx" ON "DataHash"("hash")`,
+  `ALTER TABLE "Query" ADD COLUMN IF NOT EXISTS "progressiveBrief" JSONB`,
 ];
 
 let ensured = false;

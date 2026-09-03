@@ -88,6 +88,9 @@ export function jobNeedsDatasetIngest(job: {
 }): boolean {
   if (job.status !== "succeeded") return false;
   if (!job.apifyDatasetId) return false;
+  if ((job.input as Record<string, unknown> | null)?._ingested === true) {
+    return false;
+  }
   // itemCount===0 always needs another ingest attempt — a prior empty pass may
   // have set _ingested after wiping the records array (alias bug) or a SQL miss.
   if (job.itemCount > 0) return false;

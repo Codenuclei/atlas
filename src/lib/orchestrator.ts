@@ -4,6 +4,11 @@ import { getApify } from "@/lib/apify/client";
 import { getConnector } from "@/lib/connectors/registry";
 import { validatePlan } from "@/lib/ai/planner";
 import { estimatePlanCost } from "@/lib/ai/cost";
+import {
+  parseProgressiveBriefState,
+  runFinalBriefVerify,
+  scheduleProgressiveBrief,
+} from "@/lib/ai/progressive-brief";
 import { generateBrief, scoreResults } from "@/lib/ai/synthesize";
 import { logClaude, logClaudeError } from "@/lib/ai/claude-log";
 import { extractLinkedInUrls, mergeKeyFor, mergeRecords } from "@/lib/resolve";
@@ -42,7 +47,7 @@ import {
   deriveInstagramExampleHashtags,
   isOwnedBrandCreative,
 } from "@/lib/content-research";
-import { clampMaxItems, isTestMode } from "@/lib/utils";
+import { clampMaxItems, DEFAULT_MAX_ITEMS, isTestMode } from "@/lib/utils";
 import type { CohesivityDb } from "@/lib/db/cohesivity-client";
 
 function parseParams(connectorId: string, params: unknown) {
@@ -283,7 +288,7 @@ async function startJob(jobId: string): Promise<boolean> {
           industry: meta.industry,
           tags: meta.tags,
           isHiring: meta.isHiring,
-          maxItems: clampMaxItems(meta.maxItems, 100),
+          maxItems: clampMaxItems(meta.maxItems, DEFAULT_MAX_ITEMS),
           _orchestrated: true,
           ...(meta._broadenAttempt
             ? { _broadenAttempt: meta._broadenAttempt, _notice: meta._notice }
@@ -674,7 +679,20 @@ export async function ingestRecords(
   }
 }
 
-async function ingestDataset(jobId: string) {
+function ingestOffsetFromInput(input: unknown): number {
+  const raw = (input as Record<string, unknown> | null)?._ingestOffset;
+  return typeof raw === "number" && raw >= 0 ? Math.floor(raw) : 0;
+}
+
+/**
+ * Ingest Apify dataset pages incrementally (_ingestOffset checkpoint).
+ * While the run is active, partial pages are exposed via sync poll; final pass
+ * runs broaden/founder-expand when the job succeeds.
+ */
+async function ingestDatasetDelta(
+  jobId: string,
+  options: { final?: boolean } = {},
+): Promise<boolean> {
   const job = await db.job.findUniqueOrThrow({
     where: { id: jobId },
     include: {
@@ -686,12 +704,13 @@ async function ingestDataset(jobId: string) {
       },
     },
   });
-  if (!job.apifyDatasetId) return;
+  if (!job.apifyDatasetId) return false;
+
   const connector = getConnector(job.connectorId);
   const apify = getApify();
   const pageSize = 100;
-  let offset = 0;
-  let total = 0;
+  const priorInput = (job.input ?? {}) as Record<string, unknown>;
+  let offset = ingestOffsetFromInput(priorInput);
   const records: ScrapedRecord[] = [];
   const priorResults = (job.query.results ?? []).map(
     (row) => row.data as ScrapedRecord,
@@ -704,13 +723,15 @@ async function ingestDataset(jobId: string) {
           brandHintFromQuery(job.query),
         )
       : [];
+
+  let total = offset;
   do {
     const page = await apify.listDatasetItems(job.apifyDatasetId, {
       limit: pageSize,
       offset,
     });
     const items = page.items ?? [];
-    total = page.total ?? items.length;
+    total = page.total ?? Math.max(total, offset + items.length);
     records.push(
       ...items
         .map((item) => connector.normalize(item))
@@ -725,53 +746,74 @@ async function ingestDataset(jobId: string) {
     );
     offset += items.length;
     if (items.length === 0) break;
-  } while (offset < total);
-  if (connector.id === "yc-companies") {
-    const companyCount = records.filter((record) => record.sourceType === "yc").length;
-    // Broaden on sparse hits too — Education∩AI∩past-year often returns 1 company
-    // and used to stop there because broaden only ran on zero.
-    if (companyCount < MIN_YC_COMPANIES_BEFORE_BROADEN) {
+    if (!options.final && offset >= total) break;
+  } while (options.final && offset < total);
+
+  if (records.length === 0 && !options.final) {
+    return false;
+  }
+
+  if (records.length > 0) {
+    await ingestRecords(job.queryId, job.id, records);
+  }
+
+  if (connector.id === "yc-companies" && options.final) {
+    const ycCount = await db.result.count({
+      where: { queryId: job.queryId, sourceType: "yc" },
+    });
+    if (ycCount < MIN_YC_COMPANIES_BEFORE_BROADEN) {
       const current = ycCompaniesInputFromJobInput(
         (job.input ?? {}) as Record<string, unknown>,
       );
       const attempt = Number(current._broadenAttempt ?? 0);
       if (attempt < 4) {
         const queued = await queueYcBroadenRetry(job, current, attempt, {
-          sparse: companyCount > 0,
-          companyCount,
+          sparse: ycCount > 0,
+          companyCount: ycCount,
         });
-        if (queued) return;
+        if (queued) return true;
       }
     }
-    // Cohesivity: expand founders for a capped company count (see
-    // ycFounderExpandCompanyLimit). Batched upsertMany keeps SQL budget OK;
-    // remaining founders stay nested on company.raw.founders.
-    // Copy into a new array first: withExpandedYcFounders(records, 0) returns
-    // the same reference, and `records.length = 0` would wipe companies before push.
-    const next = withExpandedYcFounders(
-      records,
+    const allYcRows = await db.result.findMany({
+      where: { queryId: job.queryId, sourceType: "yc" },
+      select: { data: true },
+    });
+    const allCompanies = allYcRows.map((row) => row.data as ScrapedRecord);
+    const withFounders = withExpandedYcFounders(
+      allCompanies,
       ycFounderExpandCompanyLimit(dbProvider),
     );
-    const materialized = next === records ? records.slice() : next;
-    records.length = 0;
-    records.push(...materialized);
+    const founderRows = withFounders.filter(
+      (record) => record.sourceType === "profile",
+    );
+    if (founderRows.length > 0) {
+      await ingestRecords(job.queryId, job.id, founderRows);
+    }
   }
-  await ingestRecords(job.queryId, job.id, records);
-  const priorInput = (job.input ?? {}) as Record<string, unknown>;
-  // Only mark ingested when we actually have rows (or confirmed empty dataset).
-  // Marking _ingested with itemCount=0 blocked retries after the cohesivity
-  // founder-expand alias wipe.
+
+  const resultCount = await db.result.count({ where: { jobId: job.id } });
   await db.job.update({
     where: { id: job.id },
     data: {
-      itemCount: records.length,
-      finishedAt: job.finishedAt ?? new Date(),
+      itemCount: resultCount,
+      finishedAt: options.final ? job.finishedAt ?? new Date() : job.finishedAt,
       input: {
         ...priorInput,
-        _ingested: records.length > 0,
+        _ingestOffset: offset,
+        _ingested: options.final && resultCount > 0,
       } as Prisma.InputJsonValue,
     },
   });
+
+  if (connector.id === "yc-companies" && records.length > 0) {
+    scheduleProgressiveBrief(job.queryId);
+  }
+
+  return records.length > 0 || options.final;
+}
+
+async function ingestDataset(jobId: string) {
+  return ingestDatasetDelta(jobId, { final: true });
 }
 
 async function queueYcBroadenRetry(
@@ -791,7 +833,7 @@ async function queueYcBroadenRetry(
     industry: current.industry,
     tags: current.tags,
     isHiring: current.isHiring,
-    maxItems: clampMaxItems(current.maxItems, 100),
+    maxItems: clampMaxItems(current.maxItems, DEFAULT_MAX_ITEMS),
   };
 
   let next: YcCompaniesInput | null = null;
@@ -869,6 +911,7 @@ async function queueYcBroadenRetry(
       status: "running",
       summary: null,
       synthesisStartedAt: null,
+      progressiveBrief: null,
     },
   });
   await db.job.update({
@@ -925,15 +968,21 @@ export async function syncQuery(queryId: string) {
       const run = await apify.getRun(job.apifyRunId);
       const status = mapApifyStatus(run.status);
       if (status !== job.status) dirty = true;
+      const datasetId = run.defaultDatasetId ?? job.apifyDatasetId;
       await db.job.update({
         where: { id: job.id },
         data: {
           status,
-          apifyDatasetId: run.defaultDatasetId ?? job.apifyDatasetId,
+          apifyDatasetId: datasetId,
           error: status === "failed" ? run.statusMessage ?? "Actor run failed" : job.error,
           finishedAt: isTerminalJobStatus(status) ? new Date() : null,
         },
       });
+      if (datasetId && !isTerminalJobStatus(status)) {
+        if (await ingestDatasetDelta(job.id, { final: false })) {
+          dirty = true;
+        }
+      }
       if (status === "succeeded") {
         await ingestDataset(job.id);
         dirty = true;
@@ -963,12 +1012,13 @@ export async function syncQuery(queryId: string) {
 
   // Results are in DB first. Only then schedule brief persistence (async).
   // SSE / regenerate share the same persistQueryBrief writer.
-  if (
+  const progressive = parseProgressiveBriefState(fresh.progressiveBrief);
+  const needsFinalBrief =
     nextStatus === "succeeded" &&
     fresh.results.length > 0 &&
-    !fresh.summary &&
-    !fresh.synthesisStartedAt
-  ) {
+    !fresh.synthesisStartedAt &&
+    (!fresh.summary || (progressive && !progressive.finalVerified));
+  if (needsFinalBrief) {
     scheduleQueryBrief(queryId);
   }
 
@@ -1067,7 +1117,7 @@ export async function persistQueryBrief(
   if (force && query.summary) {
     await db.query.update({
       where: { id: queryId },
-      data: { summary: null, synthesisStartedAt: null },
+      data: { summary: null, synthesisStartedAt: null, progressiveBrief: null },
     });
   }
 
@@ -1116,27 +1166,53 @@ export async function persistQueryBrief(
   try {
     const records = query.results.map((row) => row.data as ScrapedRecord);
     const ctx = { queryId, trigger };
-    const [brief, synthesis] = await Promise.all([
-      generateBrief(query.text, records, ctx).catch(() => ""),
-      scoreResults(query.text, records, ctx),
-    ]);
-    let summary = brief.length > 400 ? brief : synthesis.summary;
-    if (!summary.trim()) {
-      summary = synthesis.summary;
-    }
-    if (onDelta && summary) onDelta(summary);
+    const progressive = parseProgressiveBriefState(query.progressiveBrief);
+    const hasYc = records.some(
+      (record) =>
+        record.sourceType === "yc" ||
+        (record.sourceType === "profile" &&
+          record.raw.researchRole === "yc-founder"),
+    );
 
+    let summary = "";
     let scoresUpdated = 0;
-    for (const score of synthesis.scores) {
-      const match = query.results.find(
-        (row) => row.externalId === score.externalId,
+
+    if (
+      hasYc &&
+      progressive &&
+      progressive.passes.length > 0 &&
+      !progressive.finalVerified &&
+      !force
+    ) {
+      summary = await runFinalBriefVerify(
+        queryId,
+        query.text,
+        records,
+        progressive,
       );
-      if (!match) continue;
-      await db.result.update({
-        where: { id: match.id },
-        data: { score: score.score },
-      });
-      scoresUpdated += 1;
+      if (onDelta && summary) onDelta(summary);
+    } else {
+      const [brief, synthesis] = await Promise.all([
+        generateBrief(query.text, records, ctx).catch(() => ""),
+        scoreResults(query.text, records, ctx),
+      ]);
+      summary = brief.length > 400 ? brief : synthesis.summary;
+      if (!summary.trim()) {
+        summary = synthesis.summary;
+      }
+      if (onDelta && summary) onDelta(summary);
+
+      for (const score of synthesis.scores) {
+        const match = query.results.find(
+          (row) => row.externalId === score.externalId,
+        );
+        if (!match) continue;
+        await db.result.update({
+          where: { id: match.id },
+          data: { score: score.score },
+        });
+        scoresUpdated += 1;
+      }
     }
 
     // DB write is the source of truth — always before returning to SSE/client.
@@ -1151,7 +1227,7 @@ export async function persistQueryBrief(
       trigger,
       summaryLength: summary.length,
       scoresUpdated,
-      source: brief.length > 400 ? "stream" : "structured",
+      source: progressive && !force ? "progressive_verify" : "full",
     });
 
     return { summary, cached: false, scoresUpdated };
@@ -1222,6 +1298,7 @@ export async function retryFailedJobs(queryId: string) {
       status: "running",
       summary: null,
       synthesisStartedAt: null,
+      progressiveBrief: null,
     },
   });
 

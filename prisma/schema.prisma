@@ -14,6 +14,7 @@ model Query {
   plan            Json
   status          String
   summary         String?
+  progressiveBrief Json?
   synthesisStartedAt DateTime?
   costEstimateUsd Float
   createdAt       DateTime @default(now())

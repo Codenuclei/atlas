@@ -99,7 +99,7 @@ export function heuristicPlan(query: string): ScrapePlan {
     const isHiring = /\bhiring\b|\bhire\b/.test(text);
     const ycParams: Record<string, unknown> = {
       isHiring,
-      maxItems: 50,
+      maxItems: 500,
     };
     if (cleanedQuery && cleanedQuery.toLowerCase() !== industry?.toLowerCase()) {
       ycParams.query = cleanedQuery;

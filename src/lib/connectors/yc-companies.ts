@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { clampMaxItems } from "@/lib/utils";
+import {
+  clampMaxItems,
+  DEFAULT_MAX_ITEMS,
+  YC_ACTOR_MAX_RECORDS,
+} from "@/lib/utils";
 import { firstText, type ScrapedRecord } from "@/lib/normalize";
 import type { Connector } from "@/lib/connectors/types";
 
@@ -278,8 +282,8 @@ export function ycCompaniesInputFromJobInput(
     rawMax == null
       ? undefined
       : rawMax > 0
-        ? clampMaxItems(rawMax, 100)
-        : 100;
+        ? clampMaxItems(rawMax, DEFAULT_MAX_ITEMS)
+        : DEFAULT_MAX_ITEMS;
   const looksLikeActorInput =
     "maxRecords" in input ||
     "hiringOnly" in input ||
@@ -427,8 +431,9 @@ export function prepareYcActorInput(input: YcCompaniesInput) {
   const filteredTags = (input.tags ?? []).filter(
     (tag) => tag.toLowerCase() !== input.industry?.toLowerCase(),
   );
-  // Always send maxRecords >= 1 (default 100).
-  const maxItems = clampMaxItems(input.maxItems, 100);
+  // maxRecords capped at YC_ACTOR_MAX_RECORDS (Algolia hitsPerPage); platform clamp via DEFAULT_MAX_ITEMS.
+  const maxItems = clampMaxItems(input.maxItems, DEFAULT_MAX_ITEMS);
+  const maxRecords = Math.min(maxItems, YC_ACTOR_MAX_RECORDS);
   const query = (input.query ?? "").trim();
   let safeQuery =
     query.split(/\s+/).filter(Boolean).length > 4 ? "" : query;
@@ -447,8 +452,8 @@ export function prepareYcActorInput(input: YcCompaniesInput) {
     stages: [] as string[],
     hiringOnly: Boolean(input.isHiring),
     topCompaniesOnly: false,
-    maxRecords: maxItems,
-    hitsPerPage: 1000,
+    maxRecords,
+    hitsPerPage: YC_ACTOR_MAX_RECORDS,
     requestDelay: 300,
   };
 }

@@ -10,7 +10,7 @@ import {
 } from "@/lib/connectors/yc-companies";
 import { refineYcPlanWithOrchestrator } from "@/lib/ai/yc-search-orchestrator";
 import { AppError } from "@/lib/errors";
-import { clampMaxItems, isTestMode, maxQueryCostUsd } from "@/lib/utils";
+import { clampMaxItems, DEFAULT_MAX_ITEMS, isTestMode, maxQueryCostUsd } from "@/lib/utils";
 import { estimatePlanCost } from "@/lib/ai/cost";
 
 const PLANNER_MODEL =
@@ -43,9 +43,9 @@ export function capabilitySystemPrompt() {
     "Instagram handles belong only in approved Instagram connector fields.",
     "",
     "LIMITS",
-    "Hard maximum maxItems per step: 100.",
+    "Hard maximum maxItems per step: 500 (platform cap; YC actor supports up to 1000 via Algolia).",
     "LinkedIn search/jobs: keep maxItems between 10 and 25 unless the user explicitly requests fewer.",
-    "yc-companies: default maxItems to 100 unless the user requests fewer. Never set maxItems to 0.",
+    "yc-companies: default maxItems to 500 unless the user requests fewer. Never set maxItems to 0.",
     "Avoid combinatorial LinkedIn jobs plans — maxItems applies to every title × location pair.",
     "",
     "YC COMPANIES (yc-companies)",
@@ -53,7 +53,7 @@ export function capabilitySystemPrompt() {
     "The YC actor already returns founders with LinkedIn URLs — do NOT add linkedin-profile-search unless the user explicitly asks for deeper LinkedIn research (phrases like \"linkedin\", \"deeper linkedin\", \"enrich profiles\").",
     "When LinkedIn enrichment IS requested: add linkedin-profile-search depending on yc-companies, with currentJobTitles:[\"Founder\",\"Co-Founder\",\"CEO\"], currentCompanies:[], a concise founder searchQuery, and maxItems around 20.",
     "For yc-companies params, leave only a LIGHT DRAFT:",
-    "- maxItems (~100)",
+    "- maxItems (~500)",
     "- isHiring=true only if hiring is explicit",
     "- optional empty or very short query",
     "Do NOT invent batch windows, industry, or tags in the planner.",
@@ -83,9 +83,9 @@ export function capabilitySystemPrompt() {
     "Return only the structured output required by the schema.",
     "",
     "EXAMPLES",
-    '"YC companies hiring in fintech" => one yc-companies step with {isHiring:true, maxItems:100} (industry/batch filled by YC orchestrator).',
-    '"companies under category education" => one yc-companies step with {maxItems:100}; orchestrator sets industry Education, empty batches/tags.',
-    '"YC Summer 2026 fintech companies" => one yc-companies step with {maxItems:100}; orchestrator resolves batch/industry.',
+    '"YC companies hiring in fintech" => one yc-companies step with {isHiring:true, maxItems:500} (industry/batch filled by YC orchestrator).',
+    '"companies under category education" => one yc-companies step with {maxItems:500}; orchestrator sets industry Education, empty batches/tags.',
+    '"YC Summer 2026 fintech companies" => one yc-companies step with {maxItems:500}; orchestrator resolves batch/industry.',
     '"YC current batch founders" => one yc-companies step; founders come from the actor — do not add linkedin-profile-search.',
     '"Senior backend roles in Berlin" => one linkedin-jobs step with {jobTitles:["Senior Backend Engineer"], locations:["Berlin"], maxItems:10}.',
     '"YC AI infra founders with deeper LinkedIn enrichment" => yc-companies first, then linkedin-profile-search depending on yc-companies.',
@@ -170,7 +170,7 @@ export function validatePlan(plan: ScrapePlan): ScrapePlan {
       const raw = step.params.maxItems;
       step.params.maxItems = clampMaxItems(
         typeof raw === "number" || typeof raw === "string" ? raw : undefined,
-        connector.id === "yc-companies" ? 100 : 25,
+        connector.id === "yc-companies" ? DEFAULT_MAX_ITEMS : 25,
       );
     }
     step.connectorId = connector.id;
@@ -197,10 +197,10 @@ export function validatePlan(plan: ScrapePlan): ScrapePlan {
     totalItems += connector.costEstimate(step.params as never).itemCount;
     seen.add(connector.id);
   }
-  if (totalItems > 250) {
+  if (totalItems > 1000) {
     throw new AppError(
       "COST_CAP",
-      "This plan requests too many total results. Reduce the scope below 250 items.",
+      "This plan requests too many total results. Reduce the scope below 1000 items.",
       400,
     );
   }

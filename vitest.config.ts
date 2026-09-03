@@ -14,7 +14,7 @@ export default defineConfig({
       SCRAPER_TEST_MODE: "1",
       DATABASE_URL: "file:./test.db",
       MAX_QUERY_COST_USD: "5",
-      MAX_ITEMS_CAP: "100",
+      MAX_ITEMS_CAP: "500",
       APIFY_TOKEN: "test-apify-token",
       ANTHROPIC_API_KEY: "test-anthropic-key",
       OPENROUTER_API_KEY: "sk-or-v-test-placeholder-not-live",

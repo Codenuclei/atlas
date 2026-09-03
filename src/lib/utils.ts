@@ -11,9 +11,15 @@ export function isTestMode() {
   );
 }
 
+/** Default scrape cap per step — raised from 100→500 for richer YC coverage; MAX_QUERY_COST_USD still gates spend. */
+export const DEFAULT_MAX_ITEMS = 500;
+
+/** haketa/ycombinator-companies-scraper Algolia hitsPerPage ceiling (actor maxRecords). */
+export const YC_ACTOR_MAX_RECORDS = 1000;
+
 export function maxItemsCap() {
-  const parsed = Number(process.env.MAX_ITEMS_CAP ?? 100);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+  const parsed = Number(process.env.MAX_ITEMS_CAP ?? DEFAULT_MAX_ITEMS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_ITEMS;
 }
 
 export function maxQueryCostUsd() {

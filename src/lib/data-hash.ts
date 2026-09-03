@@ -19,6 +19,7 @@ type QueryProjection = {
   status: string;
   updatedAt: Date | string;
   summary?: string | null;
+  progressiveBrief?: unknown;
   jobs?: JobProjection[];
   results?: Array<{ id: string; score: number | null }>;
 };
@@ -47,6 +48,9 @@ export function hashQueryDetail(query: QueryProjection): string {
       query.status,
       query.updatedAt,
       query.summary?.length ?? 0,
+      query.progressiveBrief
+        ? JSON.stringify(query.progressiveBrief).length
+        : 0,
       (query.jobs ?? []).map((job) => [job.id, job.status, job.itemCount, job.error]),
       (query.results ?? []).map((result) => [result.id, result.score]),
     ]),

@@ -809,7 +809,7 @@ async function ingestDatasetDelta(
     scheduleProgressiveBrief(job.queryId);
   }
 
-  return records.length > 0 || options.final;
+  return records.length > 0 || Boolean(options.final);
 }
 
 async function ingestDataset(jobId: string) {
@@ -911,7 +911,7 @@ async function queueYcBroadenRetry(
       status: "running",
       summary: null,
       synthesisStartedAt: null,
-      progressiveBrief: null,
+      progressiveBrief: Prisma.DbNull,
     },
   });
   await db.job.update({
@@ -1117,7 +1117,7 @@ export async function persistQueryBrief(
   if (force && query.summary) {
     await db.query.update({
       where: { id: queryId },
-      data: { summary: null, synthesisStartedAt: null, progressiveBrief: null },
+      data: { summary: null, synthesisStartedAt: null, progressiveBrief: Prisma.DbNull },
     });
   }
 
@@ -1298,7 +1298,7 @@ export async function retryFailedJobs(queryId: string) {
       status: "running",
       summary: null,
       synthesisStartedAt: null,
-      progressiveBrief: null,
+      progressiveBrief: Prisma.DbNull,
     },
   });
 

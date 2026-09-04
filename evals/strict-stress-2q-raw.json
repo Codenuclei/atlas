@@ -1,0 +1,108 @@
+{
+  "date": "2026-09-04T07:48:01.991Z",
+  "host": "https://noted-koala-cooking.cohesivity.app",
+  "deploy": "26e03ac9-8a06-474f-9e30-464237e6d08d",
+  "commit": "64113d9",
+  "health": {
+    "ok": true
+  },
+  "results": [
+    {
+      "id": "Q1",
+      "text": "We are diligencing Series A climate-tech vendors that sell B2B carbon-accounting SaaS to manufacturers across India and Southeast Asia. Pull Y Combinator companies from the last three years in that space, and enrich the founders with deeper LinkedIn profiles so we can map prior operator experience.",
+      "planHttp": 200,
+      "planSource": "claude",
+      "interpretation": "Find YC companies matching the query, then deepen LinkedIn research for founders.\n\nYC filters: Industrials industry with a carbon-accounting query term across the last three years of YC batches, since no dedicated Climate industry/tag exists and this actor cannot filter by region, funding stage, or enrich founder LinkedIn data.",
+      "batches": [
+        "Fall 2026",
+        "Summer 2026",
+        "Spring 2026",
+        "Winter 2026",
+        "Fall 2025",
+        "Summer 2025",
+        "Spring 2025",
+        "Winter 2025",
+        "Fall 2024",
+        "Summer 2024",
+        "Winter 2024",
+        "Summer 2023"
+      ],
+      "createHttp": 201,
+      "queryId": "cmtmnbldh459091a634a3ce34",
+      "query": {
+        "status": "succeeded",
+        "itemCount": 0,
+        "hasSummary": true,
+        "hasProgressiveBrief": true
+      },
+      "jobs": [
+        {
+          "connectorId": "yc-companies",
+          "status": "succeeded",
+          "itemCount": 100,
+          "apifyRunId": "iUQOhdcrSlnmBwTJp",
+          "error": ""
+        },
+        {
+          "connectorId": "linkedin-profile-search",
+          "status": "succeeded",
+          "itemCount": 0,
+          "apifyRunId": "BmPZJGKCAUwxEVFzI",
+          "error": ""
+        }
+      ],
+      "eval_strict": "PASS",
+      "eval": {
+        "pass": true,
+        "fails": [],
+        "itemCount": 0,
+        "status": "succeeded",
+        "ycStarted": true,
+        "ycSucceeded": true,
+        "ycRunId": "iUQOhdcrSlnmBwTJp"
+      }
+    },
+    {
+      "id": "Q2",
+      "text": "Map the competitive set around MeridianBind — think Stripe-for-freight-invoices mixed with Flexport-lite trade-compliance tooling for mid-market logistics brokers — among YC Fintech and B2B companies from Winter 2024 through Summer 2025; skip pure crypto plays and prioritize teams building AI agents for customs or invoice reconciliation.",
+      "planHttp": 200,
+      "planSource": "claude",
+      "interpretation": "Search YC companies for a competitive landscape around freight-invoice and trade-compliance fintech/B2B tooling, focusing on AI agents for customs or invoice reconciliation, excluding crypto.\n\nYC filters: Fintech industry with the AI tag folded into query, scoped to the six YC batches from Winter 2024 through Summer 2025, to surface AI-driven fintech/logistics-invoicing competitors while leaving crypto and non-fintech B2B tooling out of the strict AND filters.",
+      "batches": [
+        "Winter 2024",
+        "Summer 2024",
+        "Fall 2024",
+        "Winter 2025",
+        "Spring 2025",
+        "Summer 2025"
+      ],
+      "createHttp": 201,
+      "queryId": "cmtmnh2dba899c2f4f33707d6",
+      "query": {
+        "status": "succeeded",
+        "itemCount": 0,
+        "hasSummary": false,
+        "hasProgressiveBrief": false
+      },
+      "jobs": [
+        {
+          "connectorId": "yc-companies",
+          "status": "succeeded",
+          "itemCount": 40,
+          "apifyRunId": "wFZADjLZs236R4D2T",
+          "error": ""
+        }
+      ],
+      "eval_strict": "PASS",
+      "eval": {
+        "pass": true,
+        "fails": [],
+        "itemCount": 0,
+        "status": "succeeded",
+        "ycStarted": true,
+        "ycSucceeded": true,
+        "ycRunId": "wFZADjLZs236R4D2T"
+      }
+    }
+  ]
+}

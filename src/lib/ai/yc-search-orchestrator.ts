@@ -30,7 +30,7 @@ const MAX_TOOL_ROUNDS = 8;
 const finalizeSchema = z.object({
   query: z.string().max(80).optional().nullable(),
   batch: z.string().max(32).optional().nullable(),
-  batches: z.array(z.string().max(32)).max(16).optional().nullable(),
+  batches: z.array(z.string().max(32)).max(48).optional().nullable(),
   industry: z.string().max(64).optional().nullable(),
   tags: z.array(z.string().max(64)).max(8).optional().nullable(),
   isHiring: z.boolean().optional().nullable(),
@@ -49,7 +49,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_current_yc_batch",
     description:
-      "Return today's date and the current Y Combinator season label (e.g. Summer 2026).",
+      "Return today's date and the current actor-valid Y Combinator season label (e.g. Fall 2026). Labels always match haketa's batches enum.",
     input_schema: {
       type: "object",
       properties: {},
@@ -59,7 +59,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "list_yc_batches_for_months",
     description:
-      "Return YC seasons covering roughly the last N months from today. Prefer this for relative windows (past year → months:12, 18 months → 18). YOU choose months from the user request.",
+      "Return actor-valid YC seasons covering roughly the last N months from today. Prefer this for relative windows (past year → months:12, last 3 years → 36). Only returns labels haketa accepts (no Spring 2024; Spring starts 2025; pre-2024 is Winter/Summer only). YOU choose months from the user request.",
     input_schema: {
       type: "object",
       properties: {
@@ -75,13 +75,13 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "list_recent_yc_batches",
     description:
-      "Return the N most recent YC seasons ending at the current batch. Use when you already know an exact season count; otherwise prefer list_yc_batches_for_months.",
+      "Return the N most recent actor-valid YC seasons ending at the current batch. Skips labels not in haketa's enum. Use when you already know an exact season count; otherwise prefer list_yc_batches_for_months.",
     input_schema: {
       type: "object",
       properties: {
         count: {
           type: "number",
-          description: "How many seasons to include (1–16).",
+          description: "How many seasons to include (1–48).",
         },
       },
       required: ["count"],
@@ -91,7 +91,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "list_yc_batches_for_year",
     description:
-      "Return all four YC seasons for a calendar year. Use when the user names a year like 2025.",
+      "Return actor-valid YC seasons for a calendar year. 2025+ → Winter/Spring/Summer/Fall; 2024 → Winter/Summer/Fall (no Spring); older → Winter/Summer only. Never invent Spring 2024.",
     input_schema: {
       type: "object",
       properties: {
@@ -104,7 +104,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "parse_explicit_yc_batch",
     description:
-      "Parse an explicit season phrase like 'Summer 2025', 'W24', or 'current batch'.",
+      "Parse an explicit season phrase like 'Summer 2025', 'W24', or 'current batch'. Coerces invalid labels (e.g. Spring 2024) to the nearest actor-valid batch.",
     input_schema: {
       type: "object",
       properties: {
@@ -294,6 +294,17 @@ function runTool(name: string, input: unknown): unknown {
       const draft = draftFromArgs(args);
       const actor = prepareYcActorInput(draft);
       const warnings: string[] = [];
+      const requested =
+        draft.batches?.length
+          ? draft.batches
+          : draft.batch
+            ? [draft.batch]
+            : [];
+      if (requested.length && actor.batches.length < requested.length) {
+        warnings.push(
+          "some batches were dropped or coerced — only haketa enum labels are sent (no Spring 2024; Spring starts 2025)",
+        );
+      }
       if ((actor.query?.split(/\s+/).filter(Boolean).length ?? 0) > 4) {
         warnings.push("query is too long — shorten to ≤4 topical words or clear it");
       }
@@ -361,9 +372,15 @@ function runTool(name: string, input: unknown): unknown {
       }
       const validated = ycCompaniesSchema.parse(draft);
       const preview = prepareYcActorInput(validated);
+      // Persist only actor-valid batches so jobs never carry Spring 2024 etc.
+      const params: YcCompaniesInput = {
+        ...validated,
+        batch: undefined,
+        batches: preview.batches.length ? preview.batches : undefined,
+      };
       return {
         ok: true,
-        params: validated,
+        params,
         actorPreview: {
           query: preview.query,
           batches: preview.batches,
@@ -416,10 +433,11 @@ function systemPrompt(mode: "initial" | "broaden") {
     "   Single-word topical asks like \"learning\" / \"edtech\" map to industry Education with empty tags and empty query.",
     "2. Time language:",
     "   - Named calendar year (\"2025\", \"all of 2025\", \"four seasons of 2025\", \"YC 2025\") → list_yc_batches_for_year(2025)",
-    "     → batches exactly [\"Winter 2025\",\"Spring 2025\",\"Summer 2025\",\"Fall 2025\"]. Never put \"2025\" in query.",
-    "   - Relative windows (\"last year\", \"past 12 months\", \"past 2 years\") → list_yc_batches_for_months (12 / 24…). Prefer this ONLY when the user said relative time, not a year number.",
+    "     → use the tool's returned batches exactly (2025 has Winter/Spring/Summer/Fall). Never put \"2025\" in query.",
+    "   - Relative windows (\"last year\", \"past 12 months\", \"past 2 years\", \"last three years\") → list_yc_batches_for_months (12 / 24 / 36…). Prefer this ONLY when the user said relative time, not a year number.",
     "   - Explicit season (\"Summer 2025\", \"W24\", \"current batch\") → parse_explicit_yc_batch.",
-    "   Do NOT invent season labels. Do NOT mix a calendar year into query text.",
+    "   Do NOT invent season labels. NEVER emit Spring 2024 (haketa enum has no Spring before 2025). Prefer batch-list tools; Atlas strips unknown batches before Apify.",
+    "   Do NOT mix a calendar year into query text.",
     "3. Orthogonal tag only when the user clearly wants an extra facet (\"fintech AI\", \"AI healthcare\", \"AI teaching\")",
     "   → industry + tags for DIFFERENT concepts. Never industry Education + tag Education. Never add tags:[\"AI\"] unless AI was asked.",
     "4. Hiring (\"hiring\", \"open roles\") → isHiring:true. Otherwise false.",
@@ -481,6 +499,7 @@ function systemPrompt(mode: "initial" | "broaden") {
     "BAD: tags:[\"Education\"] instead of industry Education → wrong field.",
     "BAD: stacking AI/tags/time the user never mentioned.",
     "BAD: USER wants Stripe-like / Fintech competitors → query:\"payments infrastructure\" or \"Stripe\" — use industry Fintech, query:\"\" only.",
+    "BAD: batches including \"Spring 2024\" → Apify rejects input (enum has Winter/Summer/Fall 2024 only). Use list_* tools.",
     "",
     "Example 7 — hiring",
     "USER: YC healthcare companies that are hiring",

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   YC_ACTOR_ID,
   broadenYcCompaniesInput,
+  coerceYcBatchToAllowed,
   currentYcBatch,
   normalizeYcCompany,
   COHESIVITY_YC_FOUNDER_EXPAND_COMPANY_LIMIT,
@@ -12,6 +13,7 @@ import {
   parseYcIndustry,
   prepareYcActorInput,
   recentYcBatches,
+  sanitizeYcBatches,
   ycBatchesForMonths,
   ycBatchesForYear,
   ycCompaniesConnector,
@@ -96,6 +98,40 @@ describe("prepareYcActorInput", () => {
     expect(input.topCompaniesOnly).toBe(false);
   });
 
+  it("strips Spring 2024 and other enum-invalid batches before Apify", () => {
+    const input = prepareYcActorInput({
+      industry: "Fintech",
+      batches: [
+        "Winter 2024",
+        "Spring 2024",
+        "Summer 2024",
+        "Fall 2024",
+        "Winter 2025",
+        "Spring 2025",
+        "Summer 2025",
+      ],
+      maxItems: 100,
+    });
+    expect(input.batches).toEqual([
+      "Winter 2024",
+      "Summer 2024",
+      "Fall 2024",
+      "Winter 2025",
+      "Spring 2025",
+      "Summer 2025",
+    ]);
+    expect(input.batches).not.toContain("Spring 2024");
+  });
+
+  it("coerces a lone Spring 2024 batch to Winter 2024", () => {
+    const input = prepareYcActorInput({
+      industry: "B2B",
+      batch: "Spring 2024",
+      maxItems: 50,
+    });
+    expect(input.batches).toEqual(["Winter 2024"]);
+  });
+
   it("clears sentence-length free-text instead of sending pitches to Apify", () => {
     const actor = prepareYcActorInput({
       query: "SAVRA is an AI teaching companion for lesson plans",
@@ -130,13 +166,26 @@ describe("ycKeywordsFrom / season helpers used by AI tools", () => {
     ]);
   });
 
-  it("lists all seasons for a calendar year when the model asks", () => {
+  it("lists actor-valid seasons for calendar 2025", () => {
     expect(ycBatchesForYear(2025)).toEqual([
       "Winter 2025",
       "Spring 2025",
       "Summer 2025",
       "Fall 2025",
     ]);
+  });
+
+  it("omits Spring 2024 from calendar 2024 (haketa enum)", () => {
+    expect(ycBatchesForYear(2024)).toEqual([
+      "Winter 2024",
+      "Summer 2024",
+      "Fall 2024",
+    ]);
+    expect(ycBatchesForYear(2024)).not.toContain("Spring 2024");
+  });
+
+  it("returns only Winter/Summer for older years", () => {
+    expect(ycBatchesForYear(2023)).toEqual(["Winter 2023", "Summer 2023"]);
   });
 
   it("builds Apify JSON for education companies in calendar 2025", () => {
@@ -166,6 +215,26 @@ describe("ycKeywordsFrom / season helpers used by AI tools", () => {
       "Winter 2026",
       "Fall 2025",
     ]);
+  });
+
+  it("last-3-years window skips Spring 2024 and other invalid labels", () => {
+    const batches = ycBatchesForMonths(36, new Date("2026-09-04T12:00:00Z"));
+    expect(batches.length).toBeGreaterThan(0);
+    expect(batches).not.toContain("Spring 2024");
+    expect(batches.every((b) => sanitizeYcBatches([b]).length === 1)).toBe(true);
+    // Sep 2026 → Fall 2026 is current; include recent 2026 seasons for a 3y window.
+    expect(batches[0]).toBe("Fall 2026");
+    expect(batches).toContain("Winter 2024");
+    expect(batches).toContain("Summer 2024");
+    expect(batches).toContain("Fall 2024");
+  });
+
+  it("sanitizeYcBatches drops unknowns and coerce maps Spring 2024 → Winter 2024", () => {
+    expect(sanitizeYcBatches(["Spring 2024", "Summer 2024", "Nope"])).toEqual([
+      "Summer 2024",
+    ]);
+    expect(coerceYcBatchToAllowed("Spring 2024")).toBe("Winter 2024");
+    expect(coerceYcBatchToAllowed("Fall 2023")).toBe("Summer 2023");
   });
 });
 

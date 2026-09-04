@@ -79,7 +79,87 @@ const TAG_ALIASES: Array<[RegExp, string]> = [
 const BATCH_LONG = /\b(winter|summer|spring|fall)\s+(20\d{2})\b/i;
 const BATCH_SHORT = /\b([wsf]|sp)(\d{2})\b/i;
 
-export function currentYcBatch(now = new Date()): string {
+/**
+ * Exact `batches` enum from haketa/ycombinator-companies-scraper (Apify input schema).
+ * Spring exists only for 2025+; Fall from 2024+; older years are Winter/Summer only.
+ * Never emit labels outside this list — Apify rejects the run before it starts.
+ */
+export const YC_HAKETA_ALLOWED_BATCHES = [
+  "Fall 2026",
+  "Summer 2026",
+  "Spring 2026",
+  "Winter 2026",
+  "Fall 2025",
+  "Summer 2025",
+  "Spring 2025",
+  "Winter 2025",
+  "Fall 2024",
+  "Summer 2024",
+  "Winter 2024",
+  "Summer 2023",
+  "Winter 2023",
+  "Summer 2022",
+  "Winter 2022",
+  "Summer 2021",
+  "Winter 2021",
+  "Summer 2020",
+  "Winter 2020",
+  "Summer 2019",
+  "Winter 2019",
+  "Summer 2018",
+  "Winter 2018",
+  "Summer 2017",
+  "Winter 2017",
+  "Summer 2016",
+  "Winter 2016",
+  "Summer 2015",
+  "Winter 2015",
+  "Summer 2014",
+  "Winter 2014",
+  "Summer 2013",
+  "Winter 2013",
+  "Summer 2012",
+  "Winter 2012",
+  "Summer 2011",
+  "Winter 2011",
+  "Summer 2010",
+  "Winter 2010",
+  "Summer 2009",
+  "Winter 2009",
+  "Summer 2008",
+  "Winter 2008",
+  "Summer 2007",
+  "Winter 2007",
+  "Summer 2006",
+  "Winter 2006",
+  "Summer 2005",
+  "Unspecified",
+] as const;
+
+const YC_HAKETA_ALLOWED_BATCH_SET = new Set<string>(YC_HAKETA_ALLOWED_BATCHES);
+
+export function isAllowedYcBatch(batch: string): boolean {
+  return YC_HAKETA_ALLOWED_BATCH_SET.has(batch.trim());
+}
+
+/** Drop unknown / duplicate batch labels before Apify (hard safety net). */
+export function sanitizeYcBatches(batches: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of batches) {
+    const batch = String(raw ?? "").trim();
+    if (!batch || !YC_HAKETA_ALLOWED_BATCH_SET.has(batch) || seen.has(batch)) {
+      continue;
+    }
+    seen.add(batch);
+    out.push(batch);
+  }
+  return out;
+}
+
+const SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"] as const;
+
+function calendarSeasonLabel(now: Date): string {
   const year = now.getFullYear();
   const month = now.getMonth();
   if (month >= 8) return `Fall ${year}`;
@@ -88,18 +168,56 @@ export function currentYcBatch(now = new Date()): string {
   return `Winter ${year}`;
 }
 
-const SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"] as const;
+/** Map a calendar season to the nearest actor-valid label (e.g. Spring 2024 → Winter 2024). */
+export function coerceYcBatchToAllowed(batch: string): string | undefined {
+  const trimmed = batch.trim();
+  if (!trimmed) return undefined;
+  if (YC_HAKETA_ALLOWED_BATCH_SET.has(trimmed)) return trimmed;
+
+  const match = trimmed.match(/^(Winter|Spring|Summer|Fall)\s+(20\d{2}|19\d{2})$/i);
+  if (!match) return undefined;
+  const season =
+    match[1][0].toUpperCase() + match[1].slice(1).toLowerCase();
+  let year = Number(match[2]);
+  let seasonIdx = SEASON_ORDER.indexOf(
+    season as (typeof SEASON_ORDER)[number],
+  );
+  if (seasonIdx < 0) return undefined;
+
+  // Walk backwards through calendar seasons until we hit an allowed label.
+  for (let guard = 0; guard < 24; guard += 1) {
+    const label = `${SEASON_ORDER[seasonIdx]} ${year}`;
+    if (YC_HAKETA_ALLOWED_BATCH_SET.has(label)) return label;
+    seasonIdx -= 1;
+    if (seasonIdx < 0) {
+      seasonIdx = SEASON_ORDER.length - 1;
+      year -= 1;
+    }
+  }
+  return undefined;
+}
+
+export function currentYcBatch(now = new Date()): string {
+  return (
+    coerceYcBatchToAllowed(calendarSeasonLabel(now)) ??
+    YC_HAKETA_ALLOWED_BATCHES[0]
+  );
+}
 
 /** Pure calendar helper — AI tools call this with a count the model chooses. */
 export function recentYcBatches(count: number, now = new Date()): string[] {
-  const safeCount = Math.min(Math.max(Math.floor(count) || 1, 1), 16);
+  const safeCount = Math.min(Math.max(Math.floor(count) || 1, 1), 48);
   const current = currentYcBatch(now);
   const [season, yearRaw] = current.split(" ");
   let seasonIdx = SEASON_ORDER.indexOf(season as (typeof SEASON_ORDER)[number]);
   let year = Number(yearRaw);
   const out: string[] = [];
-  for (let i = 0; i < safeCount; i += 1) {
-    out.push(`${SEASON_ORDER[seasonIdx]} ${year}`);
+  // Collect only actor-valid labels (skip Spring 2024, Fall pre-2024, etc.).
+  for (let guard = 0; out.length < safeCount && guard < 200; guard += 1) {
+    const label = `${SEASON_ORDER[seasonIdx]} ${year}`;
+    if (YC_HAKETA_ALLOWED_BATCH_SET.has(label)) {
+      out.push(label);
+    }
     seasonIdx -= 1;
     if (seasonIdx < 0) {
       seasonIdx = SEASON_ORDER.length - 1;
@@ -109,15 +227,20 @@ export function recentYcBatches(count: number, now = new Date()): string[] {
   return out;
 }
 
-/** All four seasons for a calendar year (Winter → Fall). */
+/**
+ * Actor-valid seasons for a calendar year.
+ * 2025+ → Winter/Spring/Summer/Fall; 2024 → Winter/Summer/Fall; older → Winter/Summer.
+ */
 export function ycBatchesForYear(year: number): string[] {
   const y = String(year);
-  return [`Winter ${y}`, `Spring ${y}`, `Summer ${y}`, `Fall ${y}`];
+  return SEASON_ORDER.map((season) => `${season} ${y}`).filter((batch) =>
+    YC_HAKETA_ALLOWED_BATCH_SET.has(batch),
+  );
 }
 
 /**
  * Seasons covering roughly the last N months (4 YC seasons ≈ 12 months).
- * AI passes the time window; this only does calendar math.
+ * AI passes the time window; this only does calendar math + actor enum filter.
  */
 export function ycBatchesForMonths(months: number, now = new Date()): string[] {
   const safeMonths = Math.min(Math.max(Math.floor(months) || 1, 1), 48);
@@ -131,7 +254,7 @@ export function parseYcBatch(text: string, now = new Date()): string | undefined
   const long = text.match(BATCH_LONG);
   if (long) {
     const season = long[1][0].toUpperCase() + long[1].slice(1).toLowerCase();
-    return `${season} ${long[2]}`;
+    return coerceYcBatchToAllowed(`${season} ${long[2]}`);
   }
   const short = text.match(BATCH_SHORT);
   if (short) {
@@ -146,7 +269,7 @@ export function parseYcBatch(text: string, now = new Date()): string | undefined
           : code === "f"
             ? "Fall"
             : "Spring";
-    return `${season} ${year}`;
+    return coerceYcBatchToAllowed(`${season} ${year}`);
   }
   return undefined;
 }
@@ -422,12 +545,17 @@ export const MIN_YC_COMPANIES_BEFORE_BROADEN = 5;
  * tags fold into `query` when free-text is otherwise empty.
  */
 export function prepareYcActorInput(input: YcCompaniesInput) {
-  const batches =
+  const rawBatches =
     input.batches && input.batches.length > 0
       ? input.batches
       : input.batch
         ? [input.batch]
         : [];
+  // Hard safety net: Apify rejects the whole run if any batch is outside the enum
+  // (e.g. Spring 2024). Coerce then drop anything still unknown.
+  const batches = sanitizeYcBatches(
+    rawBatches.map((batch) => coerceYcBatchToAllowed(String(batch)) ?? String(batch)),
+  );
   const filteredTags = (input.tags ?? []).filter(
     (tag) => tag.toLowerCase() !== input.industry?.toLowerCase(),
   );

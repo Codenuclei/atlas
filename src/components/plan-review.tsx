@@ -12,14 +12,19 @@ function StepRow({
   step,
   index,
   enabled,
+  auto,
   modified,
+  blockedBy,
   onToggle,
   onPurposeChange,
 }: {
   step: ScrapeStep;
   index: number;
   enabled: boolean;
+  /** Disabled because a step it depends on was excluded — not re-checkable. */
+  auto: boolean;
   modified: boolean;
+  blockedBy: string[];
   onToggle: () => void;
   onPurposeChange: (purpose: string) => void;
 }) {
@@ -37,9 +42,10 @@ function StepRow({
       <input
         type="checkbox"
         checked={enabled}
+        disabled={auto}
         onChange={onToggle}
-        aria-label={`Include step ${index + 1}`}
-        className="mt-1 size-3.5 shrink-0 accent-accent"
+        aria-label={`Include step ${index + 1} (${step.connectorId})`}
+        className="mt-1 size-3.5 shrink-0 accent-accent disabled:cursor-not-allowed"
       />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
@@ -69,6 +75,11 @@ function StepRow({
         ) : (
           <p className="mt-1 text-xs leading-5 text-muted">{step.purpose}</p>
         )}
+        {blockedBy.length > 0 ? (
+          <p className="mt-1 text-[10px] font-medium text-warning">
+            Excluded with {blockedBy.join(", ")}
+          </p>
+        ) : null}
         {step.dependsOn.length > 0 ? (
           <p className="mt-1 text-[11px] text-faint">
             Runs after: {step.dependsOn.map(jobStageLabel).join(", ")}
@@ -94,7 +105,10 @@ export function PlanReview({
   cost,
   notice,
   pending,
+  disabled,
+  autoDisabled,
   onChange,
+  onToggle,
   onApprove,
   onBack,
 }: {
@@ -104,13 +118,15 @@ export function PlanReview({
   cost: Cost | null;
   notice: string;
   pending: boolean;
+  /** Indexes of steps excluded from the run (user-unchecked and auto-excluded). */
+  disabled: Set<number>;
+  /** Indexes excluded only because a step they depend on was excluded. */
+  autoDisabled: Set<number>;
   onChange: (plan: ScrapePlan) => void;
+  onToggle: (index: number) => void;
   onApprove: () => void;
   onBack: () => void;
 }) {
-  // Disabled steps are kept visible but excluded on approve.
-  const [disabled, setDisabled] = useState<Set<number>>(new Set());
-
   const modifiedIndexes = useMemo(() => {
     const set = new Set<number>();
     plan.steps.forEach((step, index) => {
@@ -119,14 +135,13 @@ export function PlanReview({
     return set;
   }, [plan, originalPlan]);
 
-  function toggle(index: number) {
-    setDisabled((current) => {
-      const next = new Set(current);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
+  const disabledConnectors = useMemo(() => {
+    const set = new Set<string>();
+    plan.steps.forEach((step, index) => {
+      if (disabled.has(index)) set.add(step.connectorId);
     });
-  }
+    return set;
+  }, [plan, disabled]);
 
   function setPurpose(index: number, purpose: string) {
     onChange({
@@ -137,14 +152,12 @@ export function PlanReview({
     });
   }
 
+  const enabledCount = plan.steps.length - disabled.size;
+
   function approve() {
-    const enabled = plan.steps.filter((_, index) => !disabled.has(index));
-    if (enabled.length === 0) return;
-    onChange({ ...plan, steps: enabled });
+    if (enabledCount === 0) return;
     onApprove();
   }
-
-  const enabledCount = plan.steps.length - disabled.size;
 
   return (
     <section className="space-y-4">
@@ -197,22 +210,32 @@ export function PlanReview({
           title="What will be collected"
           trailing={
             <span className="text-[11px] text-faint">
-              Uncheck a step to exclude it
+              Uncheck a step to exclude it and its dependents
             </span>
           }
         />
         <div className="divide-y divide-stroke">
-          {plan.steps.map((step, index) => (
-            <StepRow
-              key={`${step.connectorId}-${index}`}
-              step={step}
-              index={index}
-              enabled={!disabled.has(index)}
-              modified={modifiedIndexes.has(index)}
-              onToggle={() => toggle(index)}
-              onPurposeChange={(purpose) => setPurpose(index, purpose)}
-            />
-          ))}
+          {plan.steps.map((step, index) => {
+            const auto = autoDisabled.has(index);
+            const blockedBy = auto
+              ? step.dependsOn
+                  .filter((dep) => disabledConnectors.has(dep))
+                  .map(jobStageLabel)
+              : [];
+            return (
+              <StepRow
+                key={`${step.connectorId}-${index}`}
+                step={step}
+                index={index}
+                enabled={!disabled.has(index)}
+                auto={auto}
+                modified={modifiedIndexes.has(index)}
+                blockedBy={blockedBy}
+                onToggle={() => onToggle(index)}
+                onPurposeChange={(purpose) => setPurpose(index, purpose)}
+              />
+            );
+          })}
         </div>
       </Card>
 

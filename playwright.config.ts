@@ -7,6 +7,11 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:3100",
     trace: "on-first-retry",
+    // Sandbox/CI hosts often resolve localhost to ::1 only; Chromium does
+    // not fall back to IPv4, so pin localhost to the loopback the server binds.
+    launchOptions: {
+      args: ["--host-resolver-rules=MAP localhost 127.0.0.1"],
+    },
   },
   webServer: {
     command: "npx prisma db push --skip-generate --accept-data-loss && npm run dev -- --port 3100",

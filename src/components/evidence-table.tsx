@@ -219,7 +219,7 @@ export function EvidenceTable({
                       className="size-3 accent-accent"
                     />
                   </td>
-                  <td className={cn("max-w-0 px-3", compact ? "py-1" : "py-2")}>
+                  <td className={cn("w-[45%] px-3", compact ? "py-1" : "py-2")}>
                     <div className="block">
                       {item.record.sourceType === "profile" &&
                       item.record.url.includes("linkedin.com") ? (
@@ -243,9 +243,13 @@ export function EvidenceTable({
                         {platformLabel(item.record)}
                         <RoleBadge role={item.role} />
                         {item.record.sourceType === "yc" ? (
-                          <span className="truncate">{item.record.subtitle}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {item.record.subtitle}
+                          </span>
                         ) : engagement.creator ? (
-                          <span className="truncate">{engagement.creator}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {engagement.creator}
+                          </span>
                         ) : null}
                       </span>
                       {item.record.sourceType === "profile" &&

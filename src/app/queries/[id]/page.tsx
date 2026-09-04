@@ -98,11 +98,13 @@ export default function QueryPage() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let lastStatus = "";
+    let haveData = false;
     const cacheKey = `query:${params.id}`;
 
     // Instant paint from the local cache while the server revalidates.
     const cached = readCache<{ query?: QueryPayload }>(cacheKey);
     if (cached?.data.query) {
+      haveData = true;
       lastStatus = reconcileQueryStatus(
         cached.data.query.status,
         (cached.data.query.jobs ?? []).map((job) => job.status),
@@ -139,6 +141,7 @@ export default function QueryPage() {
           next = await refreshQueryFromServer();
         }
         if (next?.status) {
+          haveData = true;
           lastStatus = reconcileQueryStatus(
             next.status,
             (next.jobs ?? []).map((job) => job.status),
@@ -169,6 +172,11 @@ export default function QueryPage() {
           return;
         }
         setLoadError(message);
+        // A transient failure must not strand the page or stop live updates
+        // when a run is already on screen; keep polling until it recovers.
+        if (haveData) {
+          timer = setTimeout(() => poll(false), 8000);
+        }
       }
     }
 
@@ -186,6 +194,16 @@ export default function QueryPage() {
     if (!query?.summary) return;
     setSummary(query.summary);
   }, [query?.summary]);
+
+  // Keep the run's query in the tab title so multi-tab research stays scannable.
+  useEffect(() => {
+    const previous = document.title;
+    const text = query?.text?.trim().replace(/\s+/g, " ").slice(0, 60);
+    if (text) document.title = `${text} — Atlas`;
+    return () => {
+      document.title = previous;
+    };
+  }, [query?.text]);
 
   useEffect(() => {
     function onClickOutside(event: MouseEvent) {
@@ -243,8 +261,23 @@ export default function QueryPage() {
     });
 
   async function stopRun() {
+    if (
+      !window.confirm(
+        "Stop this run now? Completed steps and their items stay saved; remaining steps are abandoned.",
+      )
+    ) {
+      return;
+    }
     setActionPending("stop");
-    await fetch(`/api/queries/${params.id}/abort`, { method: "POST" });
+    const response = await fetch(`/api/queries/${params.id}/abort`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      setBriefError(
+        (payload as { message?: string }).message ?? "Could not stop the run",
+      );
+    }
     setActionPending("");
   }
 
@@ -387,6 +420,7 @@ export default function QueryPage() {
       invalidateCache("queries", `query:${params.id}`);
       router.push("/history");
     } else {
+      setBriefError("Could not delete the run.");
       setActionPending("");
     }
   }

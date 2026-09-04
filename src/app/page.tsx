@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowRight } from "@phosphor-icons/react";
 import { DitherLoader } from "@/components/dither-loader";
 import { fetchWithHash, readCache } from "@/lib/client-cache";
@@ -42,6 +42,8 @@ export default function HomePage() {
   const [plan, setPlan] = useState<ScrapePlan | null>(null);
   const [originalPlan, setOriginalPlan] = useState<ScrapePlan | null>(null);
   const [cost, setCost] = useState<Cost | null>(null);
+  // Steps the user unchecks during review; kept visible, never sent to the server.
+  const [explicitDisabled, setExplicitDisabled] = useState<Set<number>>(new Set());
   const [runs, setRuns] = useState<RunRow[]>([]);
 
   useEffect(() => {
@@ -59,14 +61,56 @@ export default function HomePage() {
     };
   }, []);
 
-  // Re-estimate cost when the plan is edited during review.
+  // Re-estimate cost when the plan is edited or steps are excluded during review.
+  const { enabledPlan, disabledSteps, autoDisabledSteps } = useMemo(() => {
+    if (!plan) {
+      return {
+        enabledPlan: null,
+        disabledSteps: new Set<number>(),
+        autoDisabledSteps: new Set<number>(),
+      };
+    }
+    // Excluding a step also excludes everything that depends on it, otherwise
+    // server-side plan validation (and therefore the run) rejects the plan.
+    const disabled = new Set<number>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      plan.steps.forEach((step, index) => {
+        if (disabled.has(index)) return;
+        const blockedByExclusion = step.dependsOn.some((dep) =>
+          plan.steps.some(
+            (candidate, ci) =>
+              disabled.has(ci) && candidate.connectorId === dep,
+          ),
+        );
+        if (explicitDisabled.has(index) || blockedByExclusion) {
+          disabled.add(index);
+          changed = true;
+        }
+      });
+    }
+    const auto = new Set<number>();
+    disabled.forEach((index) => {
+      if (!explicitDisabled.has(index)) auto.add(index);
+    });
+    return {
+      enabledPlan: {
+        ...plan,
+        steps: plan.steps.filter((_, index) => !disabled.has(index)),
+      },
+      disabledSteps: disabled,
+      autoDisabledSteps: auto,
+    };
+  }, [plan, explicitDisabled]);
+
   useEffect(() => {
-    if (!plan || stage !== "review") return;
+    if (!enabledPlan || stage !== "review") return;
     const timer = window.setTimeout(async () => {
       const response = await fetch("/api/estimate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(plan),
+        body: JSON.stringify(enabledPlan),
       });
       const payload = await response.json();
       if (response.ok) {
@@ -77,7 +121,7 @@ export default function HomePage() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [plan, stage]);
+  }, [enabledPlan, stage]);
 
   async function generatePlan(values: IntakeValues) {
     const text = composeQuery(values);
@@ -99,6 +143,7 @@ export default function HomePage() {
       setOriginalPlan(payload.plan);
       setCost(payload.cost);
       setNotice(payload.notice ?? "");
+      setExplicitDisabled(new Set());
       setStage("review");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to plan query");
@@ -108,14 +153,14 @@ export default function HomePage() {
   }
 
   async function approveAndRun() {
-    if (!plan) return;
+    if (!enabledPlan) return;
     setPending(true);
     setError("");
     try {
       const response = await fetch("/api/queries", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query, plan }),
+        body: JSON.stringify({ query, plan: enabledPlan }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -135,6 +180,7 @@ export default function HomePage() {
           onSubmit={generatePlan}
           pending={pending}
           mood={error ? "error" : pending ? "thinking" : "idle"}
+          initialQuery={query}
         />
       ) : null}
 
@@ -156,7 +202,17 @@ export default function HomePage() {
           cost={cost}
           notice={notice}
           pending={pending}
+          disabled={disabledSteps}
+          autoDisabled={autoDisabledSteps}
           onChange={setPlan}
+          onToggle={(index) =>
+            setExplicitDisabled((current) => {
+              const next = new Set(current);
+              if (next.has(index)) next.delete(index);
+              else next.add(index);
+              return next;
+            })
+          }
           onApprove={approveAndRun}
           onBack={() => setStage("intake")}
         />

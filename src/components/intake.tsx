@@ -139,13 +139,16 @@ export function ResearchIntake({
   onSubmit,
   pending,
   mood = "idle",
+  initialQuery = "",
 }: {
   onSubmit: (values: IntakeValues) => void;
   pending: boolean;
   mood?: BotMood;
+  /** Restores a previously composed query when the user comes back from review. */
+  initialQuery?: string;
 }) {
   const [values, setValues] = useState<IntakeValues>({
-    query: "",
+    query: initialQuery,
     platforms: "both",
     ownedHandles: "",
   });
